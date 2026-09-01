@@ -31,6 +31,8 @@ yarn-error.*
 *.pem
 
 # local env files
+# .env holds only the publishable Supabase key, which is designed to ship in the app,
+# so it is committed. Never add the service-role key to it.
 .env*.local
 
 # typescript
