@@ -67,6 +67,9 @@ export interface GameResource {
 
 export type PricingModel = 'PER_MINUTE';
 
+/** Day and night are charged differently, and staff pick which when starting a table. */
+export type TariffPeriod = 'DAY' | 'NIGHT';
+
 export interface PricingRule {
   id: ID;
   game_type_id: ID;
@@ -74,6 +77,7 @@ export interface PricingRule {
   resource_id: ID | null;
   name: string;
   model: PricingModel;
+  period: TariffPeriod;
   rate_per_minute: Paise;
   minimum_charge: Paise;
   /** Charge at least this many minutes once a session starts. */
@@ -210,11 +214,17 @@ export interface GamingSession {
   minimum_charge: Paise;
   min_billable_minutes: number;
   billing_increment_minutes: number;
+  period: TariffPeriod;
   status: SessionStatus;
   started_at: ISODate;
   ended_at: ISODate | null;
   billed_minutes: number | null;
+  /** What the clock worked out. Kept even when staff charge something else. */
+  metered_amount: Paise | null;
+  /** What was actually charged. */
   amount: Paise | null;
+  /** MANUAL means a person overrode the meter — a discount worth being able to see. */
+  amount_source: 'METERED' | 'MANUAL';
   business_day: DayKey;
   started_by: ID;
   ended_by: ID | null;

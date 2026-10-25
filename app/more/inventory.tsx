@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import {
+  View,
+} from 'react-native';
 
 import { formatMoney } from '@/domain/money';
 import { can } from '@/domain/permissions';
@@ -7,7 +9,7 @@ import { businessDayOf, formatClock, relativeDayLabel } from '@/domain/time';
 import type { InventoryMovement, Product } from '@/domain/types';
 import { profileName } from '@/store/selectors';
 import { useActor, useDb, useStore } from '@/store/useStore';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themed } from '@/theme';
 import {
   Badge,
   Button,
@@ -214,7 +216,7 @@ export default function Inventory() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   lowPill: {
     paddingHorizontal: 8,
     paddingVertical: 4,
@@ -222,4 +224,4 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: colors.warn,
   },
-});
+}));

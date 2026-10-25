@@ -41,3 +41,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+.idea/
+/tmp/
+/happy-hour-release.apk
+/happy-hour-web.zip

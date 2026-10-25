@@ -69,7 +69,7 @@ export default function Settings() {
 
       <Section title="Backend">
         <Card level={2} style={{ gap: space.sm }}>
-          <Eyebrow color={colors.accent}>On this device</Eyebrow>
+          <Eyebrow color={colors.accentText}>On this device</Eyebrow>
           <Text variant="small" color={colors.textMuted}>
             Data is stored locally, which is why the app keeps taking sales when the connection
             drops. Connecting Supabase adds sync between phones, off-site backup, and enforcement

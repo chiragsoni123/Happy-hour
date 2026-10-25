@@ -22,8 +22,27 @@ import type {
  * the due was created.
  */
 
+/**
+ * Inclusive span of business days. `null` means "everything loaded". Every report takes
+ * one of these; a single day is just `{ from: d, to: d }`.
+ */
+export interface DayRange {
+  from: DayKey;
+  to: DayKey;
+}
+
+export function inRange(day: DayKey, range: DayRange | null): boolean {
+  if (!range) return true;
+  return day >= range.from && day <= range.to;
+}
+
+export function singleDay(day: DayKey): DayRange {
+  return { from: day, to: day };
+}
+
 export interface DayTotals {
-  day: DayKey;
+  /** The range these totals cover, echoed back for labelling. */
+  range: DayRange | null;
   revenue: Paise;
   gamingRevenue: Paise;
   productRevenue: Paise;
@@ -44,7 +63,11 @@ const isLivePayment = (p: Payment) => p.status === 'COMPLETED';
 const isLiveExpense = (e: CashExpense) => e.status === 'COMPLETED';
 
 export function dayTotals(db: Database, day: DayKey): DayTotals {
-  const sales = db.sales.filter((s) => s.business_day === day);
+  return rangeTotals(db, singleDay(day));
+}
+
+export function rangeTotals(db: Database, range: DayRange | null): DayTotals {
+  const sales = db.sales.filter((s) => inRange(s.business_day, range));
   const completed = sales.filter(isLiveSale);
   const completedIds = new Set(completed.map((s) => s.id));
 
@@ -52,13 +75,13 @@ export function dayTotals(db: Database, day: DayKey): DayTotals {
   const gamingRevenue = sumBy(items.filter((i) => i.kind === 'GAMING'), (i) => i.line_total);
   const productRevenue = sumBy(items.filter((i) => i.kind === 'PRODUCT'), (i) => i.line_total);
 
-  const payments = db.payments.filter((p) => p.business_day === day && isLivePayment(p));
+  const payments = db.payments.filter((p) => inRange(p.business_day, range) && isLivePayment(p));
   const salePayments = payments.filter((p) => p.kind === 'SALE');
   const settlements = payments.filter((p) => p.kind === 'DUE_SETTLEMENT');
 
   const newDues = sumBy(
     db.due_transactions.filter(
-      (t) => t.business_day === day && t.direction === 'DEBIT' && t.reason === 'SALE_DUE',
+      (t) => inRange(t.business_day, range) && t.direction === 'DEBIT' && t.reason === 'SALE_DUE',
     ),
     (t) => t.amount,
   );
@@ -68,12 +91,12 @@ export function dayTotals(db: Database, day: DayKey): DayTotals {
   const cashSettlements = sumBy(settlements.filter((p) => p.method === 'CASH'), (p) => p.amount);
   const upiSettlements = sumBy(settlements.filter((p) => p.method === 'UPI'), (p) => p.amount);
   const cashExpenses = sumBy(
-    db.cash_expenses.filter((e) => e.business_day === day && isLiveExpense(e)),
+    db.cash_expenses.filter((e) => inRange(e.business_day, range) && isLiveExpense(e)),
     (e) => e.amount,
   );
 
   return {
-    day,
+    range,
     revenue: gamingRevenue + productRevenue,
     gamingRevenue,
     productRevenue,
@@ -124,9 +147,9 @@ export interface GamingReportRow {
   revenue: Paise;
 }
 
-export function gamingReport(db: Database, day: DayKey): GamingReportRow[] {
+export function gamingReport(db: Database, range: DayRange | null): GamingReportRow[] {
   const sessions = db.gaming_sessions.filter(
-    (s) => s.business_day === day && s.status === 'BILLED',
+    (s) => inRange(s.business_day, range) && s.status === 'BILLED',
   );
   return db.game_types
     .slice()
@@ -151,9 +174,9 @@ export interface ProductReportRow {
   revenue: Paise;
 }
 
-export function productReport(db: Database, day: DayKey): ProductReportRow[] {
+export function productReport(db: Database, range: DayRange | null): ProductReportRow[] {
   const completedIds = new Set(
-    db.sales.filter((s) => s.business_day === day && isLiveSale(s)).map((s) => s.id),
+    db.sales.filter((s) => inRange(s.business_day, range) && isLiveSale(s)).map((s) => s.id),
   );
   const byProduct = new Map<ID, ProductReportRow>();
   for (const item of db.sale_items) {
@@ -182,14 +205,14 @@ export interface StaffReportRow {
   voids: number;
 }
 
-export function staffReport(db: Database, day: DayKey): StaffReportRow[] {
+export function staffReport(db: Database, range: DayRange | null): StaffReportRow[] {
   return db.profiles
     .map((profile) => {
       const payments = db.payments.filter(
-        (p) => p.business_day === day && p.collected_by === profile.id && isLivePayment(p),
+        (p) => inRange(p.business_day, range) && p.collected_by === profile.id && isLivePayment(p),
       );
       const sales = db.sales.filter(
-        (s) => s.business_day === day && s.completed_by === profile.id && isLiveSale(s),
+        (s) => inRange(s.business_day, range) && s.completed_by === profile.id && isLiveSale(s),
       );
       return {
         staffId: profile.id,
@@ -200,7 +223,7 @@ export function staffReport(db: Database, day: DayKey): StaffReportRow[] {
         duesCreated: sumBy(
           db.due_transactions.filter(
             (t) =>
-              t.business_day === day &&
+              inRange(t.business_day, range) &&
               t.created_by === profile.id &&
               t.direction === 'DEBIT' &&
               t.reason === 'SALE_DUE',
@@ -211,7 +234,7 @@ export function staffReport(db: Database, day: DayKey): StaffReportRow[] {
           payments.filter((p) => p.kind === 'DUE_SETTLEMENT'),
           (p) => p.amount,
         ),
-        voids: db.sales.filter((s) => s.business_day === day && s.voided_by === profile.id).length,
+        voids: db.sales.filter((s) => inRange(s.business_day, range) && s.voided_by === profile.id).length,
       };
     })
     .filter(

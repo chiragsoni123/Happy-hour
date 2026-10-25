@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Linking from 'expo-linking';
 
 import { AppError } from './errors';
 import { getBackend } from './index';
@@ -69,6 +70,45 @@ export async function signUp(
   return { userId: data.user?.id ?? null, needsConfirmation: !data.session };
 }
 
+/**
+ * Password reset by emailed link.
+ *
+ * The link goes to Supabase, which verifies it and redirects to `redirectTo` with a
+ * one-time `?code=`. That redirect is a deep link into this app: `exp://…/--/reset-password`
+ * while running in Expo Go, `happyhour://reset-password` in a real build —
+ * `Linking.createURL` picks the right one. Both patterns must be on the project's
+ * redirect allowlist (Authentication → URL Configuration), or Supabase quietly sends
+ * the person to the Site URL instead.
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  const { error } = await getSupabase().auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+    redirectTo: Linking.createURL('reset-password'),
+  });
+  if (error) throw new AppError('CONFLICT', friendlyAuthError(error.message));
+}
+
+/**
+ * Turns the `code` from the recovery link into a signed-in session. PKCE ties the code
+ * to the device that asked for the reset, which is why the link has to be opened on the
+ * same phone that tapped "forgot".
+ */
+export async function sessionFromRecoveryCode(code: string): Promise<string> {
+  const { data, error } = await getSupabase().auth.exchangeCodeForSession(code);
+  if (error || !data.user) {
+    throw new AppError('NOT_AUTHENTICATED', friendlyAuthError(error?.message ?? 'Invalid link'));
+  }
+  return data.user.id;
+}
+
+/** Sets the password on the recovery session established by the link. */
+export async function setNewPassword(password: string): Promise<string> {
+  const { data, error } = await getSupabase().auth.updateUser({ password });
+  if (error || !data.user) {
+    throw new AppError('CONFLICT', friendlyAuthError(error?.message ?? 'Could not set password'));
+  }
+  return data.user.id;
+}
+
 export async function signOut(): Promise<void> {
   if (authMode() === 'password') {
     await getSupabase().auth.signOut();
@@ -82,6 +122,16 @@ function friendlyAuthError(message: string | undefined): string {
   if (raw.includes('invalid login')) return 'Wrong email or password.';
   if (raw.includes('email not confirmed')) return 'Confirm the email link before signing in.';
   if (raw.includes('already registered')) return 'That email already has an account.';
+  if (raw.includes('expired')) return 'That link has expired. Ask for a new one.';
+  if (raw.includes('invalid') || raw.includes('code verifier') || raw.includes('flow state')) {
+    return 'That link is not valid on this phone. Ask for a new one and open it here.';
+  }
+  if (raw.includes('not authorized')) {
+    return 'Supabase will only email addresses on the project team until SMTP is set up.';
+  }
+  if (raw.includes('rate limit') || raw.includes('too many')) {
+    return 'Too many attempts. Wait a minute before trying again.';
+  }
   if (raw.includes('password')) return 'Password must be at least 6 characters.';
   if (raw.includes('network')) return 'No connection. Check the wifi and try again.';
   return message || 'Could not sign in.';

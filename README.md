@@ -18,7 +18,7 @@ npx expo start
 
 Scan the QR code with Expo Go, or press `a` / `i` for an emulator.
 
-Built on **Expo SDK 54**, which is what current Expo Go supports. Expo Go only ever runs
+Built on **Expo SDK 57**, which is what current Expo Go supports. Expo Go only ever runs
 its own SDK, so the two have to stay in step — see CLAUDE.md before upgrading.
 
 On first launch, create the owner account. The first account to sign up becomes the
@@ -30,7 +30,7 @@ up second. Everyone after starts as staff, and the owner sets their role in
 npm test
 ```
 
-58 tests over the financial logic: pricing, the due ledger, inventory, voids,
+71 tests over the financial logic: pricing, the due ledger, inventory, voids,
 reconciliation, permissions, duplicate submissions and concurrency.
 
 ```bash
@@ -44,12 +44,16 @@ Each is meant to take seconds, not screens.
 | Flow | Taps |
 | --- | --- |
 | **Product sale** | Sale → tap items → CASH |
-| **Gaming** | Games → tap a free console → Start … Stop → UPI |
+| **Gaming** | Games → pick Day/Night → tap a free console → Start … Stop → confirm amount → UPI |
 | **Due** | Sale → tap items → DUE → pick customer → confirm |
 | **Settlement** | Dues → customer → Settle → amount → CASH |
 
 At any point the owner opens **More → Cash drawer** and sees expected cash, counted cash
 and the difference, without adding anything up.
+
+**Reports**, **Transactions** and the **Audit log** share one filter — Today, Yesterday,
+All, or a custom span picked by tapping two days — so looking back at last weekend is
+the same gesture on every screen.
 
 ## How the money is kept honest
 
@@ -62,6 +66,9 @@ and the difference, without adding anything up.
   UPI totals include it; revenue does not.
 - **Prices are snapshotted.** Sale lines and gaming sessions store the rate that was
   charged, so changing a price today cannot rewrite yesterday.
+- **Game time is priced by a person, not the clock.** The meter proposes an amount and
+  staff can change it; what the meter said is kept beside what was charged, so discounts
+  show up instead of disappearing.
 - **Nothing is deleted.** A wrong sale is voided, which returns stock, cancels the
   payment and reverses the due — with who, when and why against it.
 - **Operations are atomic.** Checkout either creates the sale, the payment, the stock

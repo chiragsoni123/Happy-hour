@@ -85,6 +85,13 @@ const ENTRIES: Entry[] = [
     icon: 'settings',
     permission: 'settings.manage',
   },
+  {
+    href: '/more/appearance',
+    title: 'Appearance',
+    subtitle: 'Light or dark, and your accent colour',
+    icon: 'dot',
+    permission: 'sale.create',
+  },
 ];
 
 export default function More() {
@@ -112,13 +119,13 @@ export default function More() {
               Signed in on this device
             </Text>
           </View>
-          <Badge label={actor ? ROLE_LABEL[actor.role] : ''} color={colors.accent} />
+          <Badge label={actor ? ROLE_LABEL[actor.role] : ''} color={colors.accentText} />
         </View>
         <Divider />
         <View style={{ flexDirection: 'row', gap: space.lg }}>
           <View style={{ flex: 1, gap: 2 }}>
             <Eyebrow>Expected cash</Eyebrow>
-            <Money value={position.expectedCash} variant="heading" color={colors.cash} />
+            <Money value={position.expectedCash} variant="heading" color={colors.cashText} />
           </View>
           <View style={{ flex: 1, gap: 2 }}>
             <Eyebrow>Day</Eyebrow>
@@ -138,7 +145,7 @@ export default function More() {
                 title={entry.title}
                 subtitle={entry.subtitle}
                 icon={entry.icon}
-                iconColor={colors.accent}
+                iconColor={colors.accentText}
                 onPress={() => router.push(entry.href as never)}
               />
             </View>
@@ -149,8 +156,8 @@ export default function More() {
       <Card level={2} style={{ gap: space.sm }}>
         <Eyebrow>Data</Eyebrow>
         <Text variant="small" color={colors.textMuted}>
-          Everything is stored on this device right now, so the app keeps working when the
-          internet does not. Connecting Supabase will sync it across phones and back it up.
+          Sales, dues and stock live in the shared database, so every phone on the counter
+          sees the same figures. Appearance is the one thing kept on this phone alone.
         </Text>
       </Card>
 

@@ -1,17 +1,21 @@
-import { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useMemo } from 'react';
+import {
+  View,
+} from 'react-native';
 
 import { totalOutstanding } from '@/domain/ledger';
 import { formatMoney } from '@/domain/money';
+import { DateRangeFilter, useDateRange } from '@/components/DateRangeFilter';
 import {
   cashPosition,
   gamingReport,
   productReport,
+  rangeTotals,
   staffReport,
 } from '@/domain/reporting';
-import { currentBusinessDay, formatDuration, relativeDayLabel, toDateKey } from '@/domain/time';
+import { formatDuration } from '@/domain/time';
 import { useDb } from '@/store/useStore';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themed } from '@/theme';
 import {
   Card,
   Divider,
@@ -22,7 +26,6 @@ import {
   Row,
   Screen,
   Section,
-  Segmented,
   Text,
 } from '@/ui';
 
@@ -32,53 +35,52 @@ import {
  */
 export default function Reports() {
   const db = useDb();
-  const today = currentBusinessDay();
-  const [day, setDay] = useState(today);
+  const filter = useDateRange('today');
+  const { range } = filter;
 
-  const position = useMemo(() => cashPosition(db, day), [db, day]);
-  const gaming = useMemo(() => gamingReport(db, day), [db, day]);
-  const products = useMemo(() => productReport(db, day), [db, day]);
-  const staff = useMemo(() => staffReport(db, day), [db, day]);
+  // The drawer only makes sense for one day; a span shows trading totals alone.
+  const singleDay = range && range.from === range.to ? range.from : null;
+  const totals = useMemo(() => rangeTotals(db, range), [db, range]);
+  const drawer = useMemo(() => (singleDay ? cashPosition(db, singleDay) : null), [db, singleDay]);
+  const gaming = useMemo(() => gamingReport(db, range), [db, range]);
+  const products = useMemo(() => productReport(db, range), [db, range]);
+  const staff = useMemo(() => staffReport(db, range), [db, range]);
   const outstanding = useMemo(() => totalOutstanding(db.due_transactions), [db]);
-
-  const dayOptions = useMemo(() => {
-    const days: { value: string; label: string }[] = [];
-    for (let i = 0; i < 3; i += 1) {
-      const d = new Date(`${today}T12:00:00`);
-      d.setDate(d.getDate() - i);
-      const key = toDateKey(d);
-      days.push({ value: key, label: relativeDayLabel(key, today) });
-    }
-    return days;
-  }, [today]);
+  const tradingDays = useMemo(
+    () => [...new Set(db.sales.map((s) => s.business_day))],
+    [db],
+  );
 
   const topProducts = products.slice(0, 8);
   const maxProductRevenue = topProducts[0]?.revenue ?? 1;
 
   return (
     <Screen>
-      <Header title="Reports" eyebrow={relativeDayLabel(day, today)} back />
+      <Header title="Reports" eyebrow={filter.label} back />
 
-      <Segmented options={dayOptions} value={day} onChange={setDay} />
+      <DateRangeFilter state={filter} availableDays={tradingDays} />
 
       <Card level={1} style={styles.hero}>
         <Eyebrow color="rgba(5,7,3,0.6)">Revenue</Eyebrow>
-        <Money value={position.revenue} variant="hero" color={colors.onAccent} fancySymbol />
+        <Money value={totals.revenue} variant="hero" color={colors.onAccent} fancySymbol />
         <View style={styles.heroSplit}>
-          <HeroCell label="Gaming" value={position.gamingRevenue} />
-          <HeroCell label="Products" value={position.productRevenue} />
-          <HeroCell label="Bills" value={position.saleCount} raw />
+          <HeroCell label="Gaming" value={totals.gamingRevenue} />
+          <HeroCell label="Products" value={totals.productRevenue} />
+          <HeroCell label="Bills" value={totals.saleCount} raw />
         </View>
       </Card>
 
       <Section title="Money in">
         <Card level={2} style={{ gap: space.md }}>
-          <Line label="Cash sales" value={position.cashSales} tone={colors.cash} />
-          <Line label="UPI sales" value={position.upiSales} tone={colors.upi} />
-          <Line label="New dues" value={position.newDues} tone={colors.due} />
+          <Line label="Cash sales" value={totals.cashSales} tone={colors.cashText} />
+          <Line label="UPI sales" value={totals.upiSales} tone={colors.upiText} />
+          <Line label="New dues" value={totals.newDues} tone={colors.due} />
           <Divider />
-          <Line label="Due settlements (not revenue)" value={position.cashSettlements + position.upiSettlements} tone={colors.brand} />
-          <Line label="Cash expenses" value={-position.cashExpenses} tone={colors.danger} />
+          <Line label="Due settlements (not revenue)" value={totals.cashSettlements + totals.upiSettlements} tone={colors.brand} />
+          <Line label="Cash expenses" value={-totals.cashExpenses} tone={colors.danger} />
+          {drawer ? (
+            <Line label="Expected in drawer" value={drawer.expectedCash} tone={colors.cashText} />
+          ) : null}
           <Divider />
           <Line label="Outstanding dues, all time" value={outstanding} tone={colors.warn} big />
         </Card>
@@ -88,7 +90,7 @@ export default function Reports() {
         {gaming.length === 0 ? (
           <Card level={2}>
             <Text variant="body" color={colors.textMuted}>
-              No games billed on this day.
+              No games billed in this period.
             </Text>
           </Card>
         ) : (
@@ -100,7 +102,7 @@ export default function Reports() {
                   title={row.name}
                   subtitle={`${row.sessions} session${row.sessions === 1 ? '' : 's'} · ${formatDuration(row.minutes)}`}
                   value={formatMoney(row.revenue)}
-                  valueColor={colors.accent}
+                  valueColor={colors.accentText}
                 />
               </View>
             ))}
@@ -112,7 +114,7 @@ export default function Reports() {
         {topProducts.length === 0 ? (
           <Card level={2}>
             <Text variant="body" color={colors.textMuted}>
-              Nothing sold on this day.
+              Nothing sold in this period.
             </Text>
           </Card>
         ) : (
@@ -126,7 +128,7 @@ export default function Reports() {
                   <Text variant="small" color={colors.textMuted} tabular>
                     {row.quantity} sold
                   </Text>
-                  <Money value={row.revenue} variant="bodyStrong" color={colors.accent} />
+                  <Money value={row.revenue} variant="bodyStrong" color={colors.accentText} />
                 </View>
                 <View style={styles.barTrack}>
                   <View
@@ -144,7 +146,7 @@ export default function Reports() {
 
       <Section title="Staff">
         {staff.length === 0 ? (
-          <EmptyState icon="people" title="No activity on this day" />
+          <EmptyState icon="people" title="No activity in this period" />
         ) : (
           <Card level={2} padded={false} style={{ paddingHorizontal: space.xl }}>
             {staff.map((row, index) => (
@@ -161,8 +163,8 @@ export default function Reports() {
                     </Text>
                   </View>
                   <View style={styles.chips}>
-                    <Chip label="Cash" value={row.cashCollected} color={colors.cash} />
-                    <Chip label="UPI" value={row.upiCollected} color={colors.upi} />
+                    <Chip label="Cash" value={row.cashCollected} color={colors.cashText} />
+                    <Chip label="UPI" value={row.upiCollected} color={colors.upiText} />
                     <Chip label="Dues" value={row.duesCreated} color={colors.due} />
                   </View>
                 </View>
@@ -220,7 +222,7 @@ function Chip({ label, value, color }: { label: string; value: number; color: st
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   hero: {
     backgroundColor: colors.accent,
     gap: space.xs,
@@ -267,4 +269,4 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
     gap: 2,
   },
-});
+}));

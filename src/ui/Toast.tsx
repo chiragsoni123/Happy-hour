@@ -3,16 +3,16 @@ import { Animated, Pressable, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useStore } from '@/store/useStore';
-import { colors, radius, shadow, space } from '@/theme';
+import { colors, elevation, radius, space } from '@/theme';
 
 import { Icon, type IconName } from './Icon';
 import { Text } from './Text';
 
-const TONE: Record<string, { bg: string; fg: string; icon: IconName }> = {
+const tones = (): Record<string, { bg: string; fg: string; icon: IconName }> => ({
   success: { bg: colors.accent, fg: colors.onAccent, icon: 'check' },
   error: { bg: colors.danger, fg: '#1B0400', icon: 'alert' },
   info: { bg: colors.surfaceHigh, fg: colors.text, icon: 'clock' },
-};
+});
 
 /**
  * One toast at a time, top-anchored so it never covers the payment keys at the bottom
@@ -43,7 +43,8 @@ export function ToastHost() {
   }, [toast, slide, dismiss]);
 
   if (!toast) return null;
-  const tone = TONE[toast.tone] ?? TONE.info;
+  const table = tones();
+  const tone = table[toast.tone] ?? table.info;
   if (!tone) return null;
 
   return (
@@ -82,6 +83,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.xl,
     paddingVertical: space.lg,
     borderRadius: radius.lg,
-    ...shadow.float,
+    ...elevation('float'),
   },
 });

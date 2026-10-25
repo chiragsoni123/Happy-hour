@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js';
 
 import type {
@@ -34,6 +35,47 @@ import { getSupabase } from './client';
  */
 const HISTORY_DAYS = 45;
 const AUDIT_PAGE = 200;
+/** Last good snapshot, so a relaunch paints instantly instead of waiting on the network. */
+const CACHE_KEY = 'happyhour.mirror.v1';
+
+/** Small, and needed in full. */
+const WHOLE_TABLES = [
+  'profiles',
+  'categories',
+  'products',
+  'game_types',
+  'game_resources',
+  'pricing_rules',
+  'customers',
+  // A customer's balance is the sum of their entire history, so this one is never windowed.
+  'due_transactions',
+  'settings',
+] as const;
+
+/** Grows forever, so only the recent window is pulled. */
+const WINDOWED_TABLES = {
+  sales: 'business_day',
+  sale_items: 'created_at',
+  payments: 'business_day',
+  inventory_transactions: 'business_day',
+  gaming_sessions: 'business_day',
+  cash_expenses: 'business_day',
+  daily_closings: 'business_day',
+} as const;
+
+type TableName = (typeof WHOLE_TABLES)[number] | keyof typeof WINDOWED_TABLES;
+
+/** Checkout and void ripple the furthest: money, stock, dues and the day all move. */
+const SALE_TABLES: readonly TableName[] = [
+  'sales',
+  'sale_items',
+  'payments',
+  'products',
+  'inventory_transactions',
+  'due_transactions',
+  'gaming_sessions',
+  'daily_closings',
+];
 
 /**
  * Talks to Postgres. Every write is one RPC or one RLS-guarded statement, so the
@@ -58,7 +100,6 @@ export class SupabaseBackend implements Backend {
 
   async load(): Promise<Database> {
     const cutoff = historyCutoff();
-    const isOwner = await this.actorIsOwner();
 
     const [
       profiles,
@@ -95,7 +136,9 @@ export class SupabaseBackend implements Backend {
       this.since('cash_expenses', 'business_day', cutoff),
       this.since('daily_closings', 'business_day', cutoff),
       this.all('settings'),
-      isOwner ? this.recentAudit() : Promise.resolve([]),
+      // Folded into the same batch rather than awaited first: one fewer round trip
+      // before the app can paint.
+      this.actorIsOwner().then((owner) => (owner ? this.recentAudit() : [])),
     ]);
 
     // An open bill or a running game from before the window still has to be reachable,
@@ -123,6 +166,7 @@ export class SupabaseBackend implements Backend {
       settings: (settings[0] as Settings | undefined) ?? defaultSettings(),
       sale_counter: maxNumber(sales as Sale[]),
     };
+    this.cache(this.db);
     return this.db;
   }
 
@@ -175,20 +219,93 @@ export class SupabaseBackend implements Backend {
     return { sales: extraSales, items: (items ?? []) as Database['sale_items'], sessions };
   }
 
-  /** Refetches the whole mirror. Used after writes that ripple across several tables. */
-  private async refresh(): Promise<Database> {
-    return this.load();
+  /**
+   * Reads the last snapshot off the device so the app can paint before the network
+   * answers. Returns null on a first run or after a sign-out.
+   */
+  async hydrate(): Promise<Database | null> {
+    if (this.db) return this.db;
+    try {
+      const raw = await AsyncStorage.getItem(CACHE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as Database;
+      this.db = parsed;
+      return parsed;
+    } catch {
+      return null;
+    }
   }
 
-  private async actorIsOwner(): Promise<boolean> {
-    const { data } = await this.sb.auth.getUser();
-    if (!data.user) return false;
-    const { data: profile } = await this.sb
-      .from('profiles')
-      .select('role')
-      .eq('id', data.user.id)
-      .maybeSingle();
-    return (profile as { role?: string } | null)?.role === 'OWNER';
+  private cache(db: Database): void {
+    // Fire and forget: a failed cache write must never fail the operation that caused it.
+    void AsyncStorage.setItem(CACHE_KEY, JSON.stringify(db)).catch(() => undefined);
+  }
+
+  /**
+   * Refetches only the tables a write could have touched, and patches them into the
+   * mirror. Pulling all seventeen after every tap was the single biggest source of
+   * sluggishness, and on a metered free tier it is also the biggest source of egress.
+   * Passing no list falls back to a full reload.
+   */
+  private async refresh(tables?: readonly TableName[]): Promise<Database> {
+    const current = this.db;
+    if (!tables || !current) return this.load();
+
+    const cutoff = historyCutoff();
+    const rows = await Promise.all(
+      tables.map((table) => {
+        const column = (WINDOWED_TABLES as Record<string, string | undefined>)[table];
+        return column ? this.since(table, column, cutoff) : this.all(table);
+      }),
+    );
+
+    const next: Database = { ...current };
+    tables.forEach((table, i) => {
+      const fetched = rows[i] ?? [];
+      if (table === 'settings') {
+        next.settings = (fetched[0] as Settings | undefined) ?? current.settings;
+        return;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (next as unknown as Record<string, unknown>)[table] = fetched;
+    });
+
+    // An open bill from before the window has to survive a targeted refresh of `sales`.
+    if (tables.includes('sales')) {
+      const known = new Set(next.sales.map((s) => s.id));
+      const stillOpen = current.sales.filter((s) => s.status === 'OPEN' && !known.has(s.id));
+      if (stillOpen.length > 0) next.sales = [...next.sales, ...stillOpen];
+    }
+    if (tables.includes('sale_items')) {
+      const known = new Set(next.sale_items.map((i) => i.id));
+      const saleIds = new Set(next.sales.filter((s) => s.status === 'OPEN').map((s) => s.id));
+      const stray = current.sale_items.filter((i) => saleIds.has(i.sale_id) && !known.has(i.id));
+      if (stray.length > 0) next.sale_items = [...next.sale_items, ...stray];
+    }
+
+    next.sale_counter = maxNumber(next.sales);
+    this.db = next;
+    this.cache(next);
+    return next;
+  }
+
+  /** Cached for the session: a role change signs the person out anyway. */
+  private ownerCheck: Promise<boolean> | null = null;
+
+  private actorIsOwner(): Promise<boolean> {
+    if (!this.ownerCheck) {
+      this.ownerCheck = (async () => {
+        const { data } = await this.sb.auth.getUser();
+        if (!data.user) return false;
+        const { data: profile } = await this.sb
+          .from('profiles')
+          .select('role')
+          .eq('id', data.user.id)
+          .maybeSingle();
+        return (profile as { role?: string } | null)?.role === 'OWNER';
+      })();
+    }
+    return this.ownerCheck;
   }
 
   private async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
@@ -198,18 +315,19 @@ export class SupabaseBackend implements Backend {
   }
 
   private async write(
+    tables: readonly TableName[],
     run: () => Promise<{ error: PostgrestError | null }>,
   ): Promise<Database> {
     const { error } = await run();
     if (error) throw translate(error);
-    return this.refresh();
+    return this.refresh(tables);
   }
 
   // ------------------------------------------------------------ trading day
 
   async setOpeningCash({ day, amount }: OpeningCashInput): Promise<Database> {
     const userId = await this.requireUser();
-    return this.write(async () =>
+    return this.write(['daily_closings'], async () =>
       this.sb
         .from('daily_closings')
         .upsert(
@@ -221,12 +339,12 @@ export class SupabaseBackend implements Backend {
 
   async closeDay({ day, actualCash, note }: CloseDayInput): Promise<Database> {
     await this.rpc('close_day', { p_day: day, p_actual_cash: actualCash, p_note: note ?? null });
-    return this.refresh();
+    return this.refresh(['daily_closings']);
   }
 
   async reopenDay({ day, reason }: { actorId: ID; day: string; reason: string }): Promise<Database> {
     await this.rpc('reopen_day', { p_day: day, p_reason: reason });
-    return this.refresh();
+    return this.refresh(['daily_closings']);
   }
 
   // --------------------------------------------------------- bills and sales
@@ -236,7 +354,7 @@ export class SupabaseBackend implements Backend {
       p_customer_id: customerId ?? null,
       p_label: label ?? null,
     });
-    const db = await this.refresh();
+    const db = await this.refresh(['sales', 'daily_closings']);
     const sale = db.sales.find((s) => s.id === saleId);
     if (!sale) throw new AppError('NOT_FOUND', 'The bill could not be opened.');
     return { db, sale };
@@ -264,7 +382,7 @@ export class SupabaseBackend implements Backend {
 
     if (existing) {
       const nextQty = existing.quantity + quantity;
-      return this.write(async () =>
+      return this.write(['sales', 'sale_items'], async () =>
         this.sb
           .from('sale_items')
           .update({ quantity: nextQty, line_total: nextQty * existing.unit_price })
@@ -272,7 +390,7 @@ export class SupabaseBackend implements Backend {
       );
     }
 
-    return this.write(async () =>
+    return this.write(['sales', 'sale_items'], async () =>
       this.sb.from('sale_items').insert({
         sale_id: saleId,
         kind: 'PRODUCT',
@@ -295,9 +413,11 @@ export class SupabaseBackend implements Backend {
       throw new AppError('CONFLICT', 'Game time is priced by the timer and cannot be edited.');
     }
     if (quantity <= 0) {
-      return this.write(async () => this.sb.from('sale_items').delete().eq('id', itemId));
+      return this.write(['sales', 'sale_items'], async () =>
+        this.sb.from('sale_items').delete().eq('id', itemId),
+      );
     }
-    return this.write(async () =>
+    return this.write(['sales', 'sale_items'], async () =>
       this.sb
         .from('sale_items')
         .update({ quantity, line_total: item.unit_price * quantity })
@@ -306,7 +426,9 @@ export class SupabaseBackend implements Backend {
   }
 
   async removeBillItem({ itemId }: { actorId: ID; itemId: ID }): Promise<Database> {
-    return this.write(async () => this.sb.from('sale_items').delete().eq('id', itemId));
+    return this.write(['sales', 'sale_items'], async () =>
+      this.sb.from('sale_items').delete().eq('id', itemId),
+    );
   }
 
   async setBillCustomer({
@@ -317,14 +439,14 @@ export class SupabaseBackend implements Backend {
     saleId: ID;
     customerId: ID | null;
   }): Promise<Database> {
-    return this.write(async () =>
+    return this.write(['sales'], async () =>
       this.sb.from('sales').update({ customer_id: customerId }).eq('id', saleId),
     );
   }
 
   async discardBill({ saleId }: { actorId: ID; saleId: ID }): Promise<Database> {
     await this.rpc('discard_bill', { p_sale_id: saleId });
-    return this.refresh();
+    return this.refresh(['sales', 'gaming_sessions', 'game_resources']);
   }
 
   async completeSale({
@@ -339,18 +461,19 @@ export class SupabaseBackend implements Backend {
       p_customer_id: customerId ?? null,
       p_client_op_id: clientOpId,
     });
-    return { db: await this.refresh(), saleId: id };
+    return { db: await this.refresh(SALE_TABLES), saleId: id };
   }
 
   async voidSale({ saleId, reason }: { actorId: ID; saleId: ID; reason: string }): Promise<Database> {
     await this.rpc('void_sale', { p_sale_id: saleId, p_reason: reason });
-    return this.refresh();
+    return this.refresh(SALE_TABLES);
   }
 
   // -------------------------------------------------------------- gaming
 
   async startSession({
     resourceId,
+    period,
     customerId,
     saleId,
   }: StartSessionInput): Promise<{ db: Database; sessionId: ID; saleId: ID }> {
@@ -358,13 +481,31 @@ export class SupabaseBackend implements Backend {
       p_resource_id: resourceId,
       p_customer_id: customerId ?? null,
       p_sale_id: saleId ?? null,
+      p_period: period,
     });
-    return { db: await this.refresh(), sessionId: result.session_id, saleId: result.sale_id };
+    const db = await this.refresh(['gaming_sessions', 'game_resources', 'sales']);
+    return { db, sessionId: result.session_id, saleId: result.sale_id };
   }
 
-  async stopSession({ sessionId }: StopSessionInput): Promise<{ db: Database; saleId: ID }> {
-    const saleId = await this.rpc<ID>('stop_session', { p_session_id: sessionId });
-    return { db: await this.refresh(), saleId };
+  async stopSession({ sessionId, amount }: StopSessionInput): Promise<{ db: Database; saleId: ID }> {
+    const saleId = await this.rpc<ID>('stop_session', {
+      p_session_id: sessionId,
+      p_amount: amount ?? null,
+    });
+    const db = await this.refresh(['gaming_sessions', 'game_resources', 'sales', 'sale_items']);
+    return { db, saleId };
+  }
+
+  async setGamingAmount({
+    sessionId,
+    amount,
+  }: {
+    actorId: ID;
+    sessionId: ID;
+    amount: number;
+  }): Promise<Database> {
+    await this.rpc('set_gaming_amount', { p_session_id: sessionId, p_amount: amount });
+    return this.refresh(['gaming_sessions', 'sales', 'sale_items']);
   }
 
   async setResourceStatus({
@@ -378,7 +519,7 @@ export class SupabaseBackend implements Backend {
     if (status === 'IN_USE') {
       throw new AppError('CONFLICT', 'Start a session to put a table in use.');
     }
-    return this.write(async () =>
+    return this.write(['game_resources'], async () =>
       this.sb.from('game_resources').update({ status }).eq('id', resourceId).eq('status', 'AVAILABLE'),
     );
   }
@@ -404,7 +545,7 @@ export class SupabaseBackend implements Backend {
       .select('id')
       .single();
     if (error) throw translate(error);
-    return { db: await this.refresh(), customerId: (data as { id: ID }).id };
+    return { db: await this.refresh(['customers']), customerId: (data as { id: ID }).id };
   }
 
   async settleDue({ customerId, amount, method, note, clientOpId }: SettleDueInput): Promise<Database> {
@@ -415,7 +556,7 @@ export class SupabaseBackend implements Backend {
       p_note: note ?? null,
       p_client_op_id: clientOpId,
     });
-    return this.refresh();
+    return this.refresh(['payments', 'due_transactions', 'daily_closings']);
   }
 
   // ---------------------------------------------------------------- stock
@@ -432,7 +573,7 @@ export class SupabaseBackend implements Backend {
       p_change: quantityChange,
       p_note: note ?? null,
     });
-    return this.refresh();
+    return this.refresh(['products', 'inventory_transactions']);
   }
 
   // ------------------------------------------------------------ catalogue
@@ -449,19 +590,34 @@ export class SupabaseBackend implements Backend {
       updated_at: nowIso(),
     };
     if (product.id) {
-      return this.write(async () => this.sb.from('products').update(row).eq('id', product.id));
+      return this.write(['products'], async () =>
+        this.sb.from('products').update(row).eq('id', product.id),
+      );
     }
-    return this.write(async () => this.sb.from('products').insert(row));
+    return this.write(['products'], async () => this.sb.from('products').insert(row));
   }
 
-  async archiveProduct({ productId }: { actorId: ID; productId: ID }): Promise<Database> {
-    return this.write(async () =>
-      this.sb.from('products').update({ archived: true, updated_at: nowIso() }).eq('id', productId),
+  async archiveProduct({
+    productId,
+    restore = false,
+  }: {
+    actorId: ID;
+    productId: ID;
+    restore?: boolean;
+  }): Promise<Database> {
+    // The database only lets the owner change `archived`; see the guard trigger.
+    return this.write(['products'], async () =>
+      this.sb
+        .from('products')
+        .update({ archived: !restore, updated_at: nowIso() })
+        .eq('id', productId),
     );
   }
 
   async updatePricingRule({ ruleId, patch }: UpdatePricingRuleInput): Promise<Database> {
-    return this.write(async () => this.sb.from('pricing_rules').update(patch).eq('id', ruleId));
+    return this.write(['pricing_rules'], async () =>
+      this.sb.from('pricing_rules').update(patch).eq('id', ruleId),
+    );
   }
 
   // ----------------------------------------------------------------- cash
@@ -471,7 +627,7 @@ export class SupabaseBackend implements Backend {
     if (amount <= 0) throw new AppError('INVALID_AMOUNT', 'Enter an amount.');
     if (!reason.trim()) throw new AppError('CONFLICT', 'Say what the money was for.');
     await this.ensureToday(userId);
-    return this.write(async () =>
+    return this.write(['cash_expenses', 'daily_closings'], async () =>
       this.sb
         .from('cash_expenses')
         .insert({ amount, category, reason: reason.trim(), created_by: userId }),
@@ -487,7 +643,7 @@ export class SupabaseBackend implements Backend {
     reason: string;
   }): Promise<Database> {
     const userId = await this.requireUser();
-    return this.write(async () =>
+    return this.write(['cash_expenses'], async () =>
       this.sb
         .from('cash_expenses')
         .update({
@@ -509,7 +665,7 @@ export class SupabaseBackend implements Backend {
         'New staff sign up on the app themselves, then you set their role here.',
       );
     }
-    return this.write(async () =>
+    return this.write(['profiles'], async () =>
       this.sb
         .from('profiles')
         .update({ full_name: staff.full_name.trim(), role: staff.role, active: staff.active })
@@ -518,7 +674,7 @@ export class SupabaseBackend implements Backend {
   }
 
   async updateSettings({ patch }: { actorId: ID; patch: Partial<Settings> }): Promise<Database> {
-    return this.write(async () => this.sb.from('settings').update(patch).eq('id', 1));
+    return this.write(['settings'], async () => this.sb.from('settings').update(patch).eq('id', 1));
   }
 
   async resetToSeed(): Promise<Database> {

@@ -1,6 +1,8 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import {
+  View,
+} from 'react-native';
 
 import { SettlePreview } from '@/components/CheckoutSheets';
 import { balanceOf, statementFor } from '@/domain/ledger';
@@ -11,7 +13,7 @@ import type { DueTransaction, PaymentMethod } from '@/domain/types';
 import { useOpId } from '@/hooks/useNow';
 import { profileName } from '@/store/selectors';
 import { useActor, useDb, useStore } from '@/store/useStore';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themed } from '@/theme';
 import {
   Badge,
   Button,
@@ -254,7 +256,7 @@ function summariseSale(db: ReturnType<typeof useDb>, saleId: string): string {
   return names.join(', ') + (extra > 0 ? ` +${extra}` : '');
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   hero: {
     backgroundColor: colors.accent,
     gap: space.xs,
@@ -270,4 +272,4 @@ const styles = StyleSheet.create({
     height: 34,
     borderRadius: radius.pill,
   },
-});
+}));

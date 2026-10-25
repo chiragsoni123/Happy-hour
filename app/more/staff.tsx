@@ -84,7 +84,7 @@ export default function Staff() {
 
         {usesAccounts ? (
           <Card level={2} style={{ gap: space.sm }}>
-            <Eyebrow color={colors.accent}>Adding someone</Eyebrow>
+            <Eyebrow color={colors.accentText}>Adding someone</Eyebrow>
             <Text variant="small" color={colors.textMuted}>
               New staff install the app and create their own account, which starts as Staff. They
               appear in the list below straight away and you set their role here.
@@ -105,7 +105,7 @@ export default function Staff() {
                 right={
                   <Badge
                     label={profile.active ? ROLE_LABEL[profile.role] : 'Inactive'}
-                    color={profile.active ? colors.accent : colors.textFaint}
+                    color={profile.active ? colors.accentText : colors.textFaint}
                   />
                 }
               />
@@ -117,7 +117,7 @@ export default function Staff() {
           <Card level={2} style={{ gap: space.md }}>
             {ROLES.map((r) => (
               <View key={r.value} style={{ gap: 2 }}>
-                <Eyebrow color={colors.accent}>{r.label}</Eyebrow>
+                <Eyebrow color={colors.accentText}>{r.label}</Eyebrow>
                 <Text variant="small" color={colors.textMuted}>
                   {ROLE_BLURB[r.value]}
                 </Text>

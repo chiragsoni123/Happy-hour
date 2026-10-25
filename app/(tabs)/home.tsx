@@ -1,6 +1,9 @@
 import { useRouter } from 'expo-router';
 import { useMemo } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import {
+  ScrollView,
+  View,
+} from 'react-native';
 
 import { formatMoney } from '@/domain/money';
 import { can } from '@/domain/permissions';
@@ -9,7 +12,7 @@ import { currentBusinessDay, formatClock, formatStopwatch, greeting, secondsBetw
 import { useNow } from '@/hooks/useNow';
 import { activeSessions, lowStockProducts, openBills, type BillView } from '@/store/selectors';
 import { useActor, useDb } from '@/store/useStore';
-import { colors, space, statusColors } from '@/theme';
+import { colors, space, statusColors, themed } from '@/theme';
 import {
   Badge,
   Button,
@@ -112,13 +115,13 @@ export default function Home() {
                 onPress={() => router.push(`/bill/${view.sale.id}`)}
               >
                 <View style={styles.sessionHead}>
-                  <Icon name={view.gameType.glyph === 'pool' ? 'pool' : 'gamepad'} size={20} color={colors.accent} />
+                  <Icon name={view.gameType.glyph === 'pool' ? 'pool' : 'gamepad'} size={20} color={colors.accentText} />
                   <Text variant="heading">{view.resource.label}</Text>
                 </View>
                 <Text variant="small" color={colors.textMuted} numberOfLines={1}>
                   {view.customer?.name ?? 'Walk-in'} · from {formatClock(view.session.started_at)}
                 </Text>
-                <Text variant="display" color={colors.accent} tabular>
+                <Text variant="display" color={colors.accentText} tabular>
                   {formatStopwatch(secondsBetween(view.session.started_at, now))}
                 </Text>
                 <Money value={view.priced.amount} variant="heading" />
@@ -135,10 +138,12 @@ export default function Home() {
               <View key={bill.sale.id}>
                 {index > 0 ? <Divider /> : null}
                 <Row
-                  title={bill.customer?.name ?? bill.sale.label ?? `Bill #${bill.sale.number}`}
+                  icon={tablesOn(db, bill).length > 0 ? 'gamepad' : 'receipt'}
+                  iconColor={tablesOn(db, bill).length > 0 ? colors.accentText : colors.textMuted}
+                  title={billTitle(db, bill)}
                   subtitle={`${describeBill(bill)} · opened ${formatClock(bill.sale.opened_at)}`}
                   value={formatMoney(bill.runningTotal)}
-                  valueColor={colors.accent}
+                  valueColor={colors.accentText}
                   onPress={() => router.push(`/bill/${bill.sale.id}`)}
                 />
               </View>
@@ -157,8 +162,8 @@ export default function Home() {
       >
         <Card level={2} style={{ gap: space.lg }}>
           <View style={styles.collectRow}>
-            <Collect label="Cash" value={position.cashSales} color={colors.cash} />
-            <Collect label="UPI" value={position.upiSales} color={colors.upi} />
+            <Collect label="Cash" value={position.cashSales} color={colors.cashText} />
+            <Collect label="UPI" value={position.upiSales} color={colors.upiText} />
             <Collect label="New dues" value={position.newDues} color={colors.due} />
           </View>
           {seeFullMoney ? (
@@ -190,6 +195,25 @@ export default function Home() {
       ) : null}
     </Screen>
   );
+}
+
+/** Which tables have time on this bill, voided ones excluded. */
+function tablesOn(db: ReturnType<typeof useDb>, bill: BillView): string[] {
+  const ids = new Set(
+    db.gaming_sessions
+      .filter((g) => g.sale_id === bill.sale.id && g.status !== 'VOIDED')
+      .map((g) => g.resource_id),
+  );
+  return db.game_resources.filter((r) => ids.has(r.id)).map((r) => r.label);
+}
+
+/** A table's bill is named after the table; a counter sale after the customer or its number. */
+function billTitle(db: ReturnType<typeof useDb>, bill: BillView): string {
+  const tables = tablesOn(db, bill);
+  if (tables.length > 0) {
+    return bill.customer ? `${tables.join(' + ')} · ${bill.customer.name}` : tables.join(' + ');
+  }
+  return bill.customer?.name ?? `Counter sale #${bill.sale.number}`;
 }
 
 /** "1 game running", "3 items", or both — a bill on the clock is never just "0 items". */
@@ -224,7 +248,7 @@ function Collect({ label, value, color }: { label: string; value: number; color:
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   head: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -270,4 +294,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space.md,
   },
-});
+}));

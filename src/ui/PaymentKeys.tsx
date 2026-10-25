@@ -3,21 +3,24 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { formatMoney, type Paise } from '@/domain/money';
 import type { CheckoutMethod } from '@/domain/types';
-import { colors, radius, shadow, space } from '@/theme';
+import { colors, elevation, radius, space } from '@/theme';
 
 import { Icon, type IconName } from './Icon';
 import { Text } from './Text';
 
-const KEYS: {
+interface Key {
   method: CheckoutMethod;
   label: string;
   icon: IconName;
   bg: string;
   fg: string;
-}[] = [
-  { method: 'CASH', label: 'Cash', icon: 'cash', bg: colors.cash, fg: colors.onAccent },
-  { method: 'UPI', label: 'UPI', icon: 'upi', bg: colors.upi, fg: '#231500' },
-  { method: 'DUE', label: 'Due', icon: 'due', bg: colors.due, fg: colors.onAccent },
+}
+
+/** Read at render. The payment colours never follow the accent, only the theme. */
+const keys = (): Key[] => [
+  { method: 'CASH', label: 'Cash', icon: 'cash', bg: colors.cash, fg: colors.onCash },
+  { method: 'UPI', label: 'UPI', icon: 'upi', bg: colors.upi, fg: colors.onUpi },
+  { method: 'DUE', label: 'Due', icon: 'due', bg: colors.due, fg: colors.onDue },
 ];
 
 export interface PaymentKeysProps {
@@ -33,10 +36,11 @@ export interface PaymentKeysProps {
  * order, always the same size — so a staff member can hit the right one without reading.
  */
 export function PaymentKeys({ amount, onPick, disabled, allow }: PaymentKeysProps) {
-  const keys = allow ? KEYS.filter((k) => allow.includes(k.method)) : KEYS;
+  const all = keys();
+  const shown = allow ? all.filter((k) => allow.includes(k.method)) : all;
   return (
     <View style={styles.row}>
-      {keys.map((key) => (
+      {shown.map((key) => (
         <Pressable
           key={key.method}
           disabled={disabled}
@@ -48,7 +52,7 @@ export function PaymentKeys({ amount, onPick, disabled, allow }: PaymentKeysProp
           }}
           style={({ pressed }) => [
             styles.key,
-            shadow.card,
+            elevation('card'),
             {
               backgroundColor: key.bg,
               opacity: disabled ? 0.4 : pressed ? 0.88 : 1,

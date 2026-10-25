@@ -92,6 +92,11 @@ export class LocalBackend implements Backend {
     return seed;
   }
 
+  /** Already on the device, so there is nothing to warm up: load() is instant. */
+  async hydrate(): Promise<Database | null> {
+    return null;
+  }
+
   async resetToSeed(): Promise<Database> {
     const seed = buildSeed();
     this.db = seed;
@@ -650,6 +655,7 @@ export class LocalBackend implements Backend {
   async startSession({
     actorId,
     resourceId,
+    period,
     customerId,
     saleId,
     note,
@@ -665,9 +671,17 @@ export class LocalBackend implements Backend {
       if (resource.status !== 'AVAILABLE') {
         throw new AppError('RESOURCE_BUSY', `${resource.label} is ${resource.status.toLowerCase().replace('_', ' ')}.`);
       }
-      const rule = resolvePricingRule(draft.pricing_rules, resource.game_type_id, resource.id);
+      const rule = resolvePricingRule(
+        draft.pricing_rules,
+        resource.game_type_id,
+        resource.id,
+        period,
+      );
       if (!rule) {
-        throw new AppError('NO_PRICING', `No price is set up for ${resource.label}.`);
+        throw new AppError(
+          'NO_PRICING',
+          `No ${period.toLowerCase()} price is set up for ${resource.label}.`,
+        );
       }
 
       let bill: Sale;
@@ -689,11 +703,14 @@ export class LocalBackend implements Backend {
         minimum_charge: rule.minimum_charge,
         min_billable_minutes: rule.min_billable_minutes,
         billing_increment_minutes: rule.billing_increment_minutes,
+        period,
         status: 'ACTIVE' as const,
         started_at: ctx.now,
         ended_at: null,
         billed_minutes: null,
+        metered_amount: null,
         amount: null,
+        amount_source: 'METERED' as const,
         business_day: ctx.day,
         started_by: ctx.actor.id,
         ended_by: null,
@@ -706,8 +723,8 @@ export class LocalBackend implements Backend {
         action: 'SESSION_STARTED',
         entity_type: 'gaming_sessions',
         entity_id: session.id,
-        summary: `${resource.label} started at ${rateLabel(rule)}`,
-        after: { resource: resource.label, rate_per_minute: rule.rate_per_minute },
+        summary: `${resource.label} started on ${period.toLowerCase()} rate, ${rateLabel(rule)}`,
+        after: { resource: resource.label, rate_per_minute: rule.rate_per_minute, period },
       });
 
       return { sessionId: session.id, saleId: bill.id };
@@ -715,7 +732,7 @@ export class LocalBackend implements Backend {
     return { db, sessionId: result.sessionId, saleId: result.saleId };
   }
 
-  async stopSession({ actorId, sessionId }: StopSessionInput): Promise<{ db: Database; saleId: ID }> {
+  async stopSession({ actorId, sessionId, amount }: StopSessionInput): Promise<{ db: Database; saleId: ID }> {
     const { db, result } = await this.tx(actorId, 'session.stop', (draft, ctx) => {
       const session = mustFind(
         draft.gaming_sessions.find((s) => s.id === sessionId),
@@ -724,14 +741,22 @@ export class LocalBackend implements Backend {
       if (session.status !== 'ACTIVE') {
         throw new AppError('ALREADY_DONE', 'That game has already been stopped.');
       }
+      if (amount !== undefined && amount !== null && amount < 0) {
+        throw new AppError('INVALID_AMOUNT', 'An amount cannot be negative.');
+      }
       const priced = priceSession({ ...session, ended_at: null }, ctx.now);
       const resource = draft.game_resources.find((r) => r.id === session.resource_id);
+
+      // The clock suggests; the staff member decides.
+      const charged = amount ?? priced.amount;
 
       session.status = 'STOPPED';
       session.ended_at = ctx.now;
       session.ended_by = ctx.actor.id;
       session.billed_minutes = priced.billedMinutes;
-      session.amount = priced.amount;
+      session.metered_amount = priced.amount;
+      session.amount = charged;
+      session.amount_source = charged === priced.amount ? 'METERED' : 'MANUAL';
       if (resource && resource.status === 'IN_USE') resource.status = 'AVAILABLE';
 
       draft.sale_items.push({
@@ -741,9 +766,9 @@ export class LocalBackend implements Backend {
         product_id: null,
         session_id: session.id,
         name: resource?.label ?? 'Game time',
-        quantity: priced.billedMinutes,
+        quantity: Math.max(1, priced.billedMinutes),
         unit_price: session.rate_per_minute,
-        line_total: priced.amount,
+        line_total: charged,
         created_at: ctx.now,
         created_by: ctx.actor.id,
       });
@@ -753,13 +778,59 @@ export class LocalBackend implements Backend {
         action: 'SESSION_STOPPED',
         entity_type: 'gaming_sessions',
         entity_id: session.id,
-        summary: `${resource?.label ?? 'Game'} stopped after ${priced.billedMinutes} min for ${formatMoney(priced.amount)}`,
-        after: { billed_minutes: priced.billedMinutes, amount: priced.amount },
+        summary: `${resource?.label ?? 'Game'} stopped after ${priced.billedMinutes} min for ${formatMoney(charged)}`,
+        before: { metered: priced.amount },
+        after: { billed_minutes: priced.billedMinutes, amount: charged, source: session.amount_source },
       });
 
       return session.sale_id;
     });
     return { db, saleId: result };
+  }
+
+  /**
+   * Corrects what a stopped game is charged, while its bill is still open. The metered
+   * figure stays on the session, so the difference reads as a discount rather than
+   * disappearing.
+   */
+  async setGamingAmount({
+    actorId,
+    sessionId,
+    amount,
+  }: {
+    actorId: ID;
+    sessionId: ID;
+    amount: number;
+  }): Promise<Database> {
+    return this.mutate(actorId, 'session.stop', (db, ctx) => {
+      if (amount < 0) throw new AppError('INVALID_AMOUNT', 'An amount cannot be negative.');
+      const session = mustFind(db.gaming_sessions.find((s) => s.id === sessionId), 'session');
+      if (session.status !== 'STOPPED') {
+        throw new AppError(
+          'CONFLICT',
+          'Only a stopped game that has not been paid for can be changed.',
+        );
+      }
+      const sale = mustFind(db.sales.find((s) => s.id === session.sale_id), 'bill');
+      assertBillOpen(sale);
+
+      const was = session.amount;
+      session.amount = amount;
+      session.amount_source = amount === session.metered_amount ? 'METERED' : 'MANUAL';
+
+      const item = db.sale_items.find((i) => i.session_id === sessionId);
+      if (item) item.line_total = amount;
+      recalcBill(db, sale.id);
+
+      ctx.audit({
+        action: 'SESSION_STOPPED',
+        entity_type: 'gaming_sessions',
+        entity_id: sessionId,
+        summary: `Game time on bill #${sale.number} corrected to ${formatMoney(amount)}`,
+        before: { amount: was },
+        after: { amount, source: session.amount_source },
+      });
+    });
   }
 
   async setResourceStatus({
@@ -984,17 +1055,32 @@ export class LocalBackend implements Backend {
     });
   }
 
-  async archiveProduct({ actorId, productId }: { actorId: ID; productId: ID }): Promise<Database> {
-    return this.mutate(actorId, 'product.manage', (db, ctx) => {
+  /**
+   * Removing is a soft delete on purpose: completed sale lines reference the product, so a
+   * hard delete would either fail or tear a hole in the history. It simply leaves the
+   * menu, and the owner can put it back.
+   */
+  async archiveProduct({
+    actorId,
+    productId,
+    restore = false,
+  }: {
+    actorId: ID;
+    productId: ID;
+    restore?: boolean;
+  }): Promise<Database> {
+    return this.mutate(actorId, 'product.remove', (db, ctx) => {
       const product = mustFind(db.products.find((p) => p.id === productId), 'product');
-      product.archived = true;
+      const before = product.archived;
+      product.archived = !restore;
       product.updated_at = ctx.now;
       ctx.audit({
         action: 'PRODUCT_UPDATED',
         entity_type: 'products',
         entity_id: product.id,
-        summary: `${product.name} archived`,
-        after: { archived: true },
+        summary: restore ? `${product.name} put back on the menu` : `${product.name} removed from the menu`,
+        before: { archived: before },
+        after: { archived: !restore },
       });
     });
   }

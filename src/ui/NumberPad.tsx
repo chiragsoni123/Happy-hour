@@ -1,8 +1,11 @@
 import * as Haptics from 'expo-haptics';
-import { Pressable, StyleSheet, View } from 'react-native';
+import {
+  Pressable,
+  View,
+} from 'react-native';
 
 import { formatMoney, type Paise } from '@/domain/money';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themed } from '@/theme';
 
 import { Icon } from './Icon';
 import { Eyebrow, Text } from './Text';
@@ -62,7 +65,7 @@ export function NumberPad({ value, onChange, label, quick, max }: NumberPadProps
               style={({ pressed }) => [styles.quick, pressed && { opacity: 0.7 }]}
               accessibilityRole="button"
             >
-              <Text variant="small" color={colors.accent} tabular>
+              <Text variant="small" color={colors.accentText} tabular>
                 {formatMoney(amount)}
               </Text>
             </Pressable>
@@ -104,7 +107,7 @@ export function paiseToDigits(paise: Paise): string {
   return String(Math.round(paise / 100));
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   display: {
     alignItems: 'center',
     gap: space.xs,
@@ -121,7 +124,7 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
     borderRadius: radius.pill,
     borderWidth: 1.5,
-    borderColor: colors.hairline,
+    borderColor: colors.border,
   },
   grid: {
     flexDirection: 'row',
@@ -133,12 +136,14 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     height: 58,
     borderRadius: radius.lg,
-    backgroundColor: colors.surfaceRaised,
+    backgroundColor: colors.surfaceHigh,
+    borderWidth: 1,
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
   keyPressed: {
-    backgroundColor: colors.surfaceHigh,
+    backgroundColor: colors.hairline,
     opacity: 0.9,
   },
-});
+}));

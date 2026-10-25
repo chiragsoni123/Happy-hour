@@ -1,13 +1,12 @@
 import { type ReactNode } from 'react';
 import {
   Pressable,
-  StyleSheet,
   View,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
 
-import { colors, radius, shadow, space } from '@/theme';
+import { colors, elevation, radius, space, themed } from '@/theme';
 
 import { Icon, type IconName } from './Icon';
 import { Eyebrow, Text } from './Text';
@@ -22,20 +21,23 @@ export interface CardProps {
   style?: StyleProp<ViewStyle>;
 }
 
-const LEVELS = {
-  1: colors.surface,
-  2: colors.surfaceRaised,
-  3: colors.surfaceHigh,
-} as const;
+/** Read at render so a theme change re-layers every card. */
+const levelColor = (level: 1 | 2 | 3): string =>
+  level === 1 ? colors.surface : level === 2 ? colors.surfaceRaised : colors.surfaceHigh;
 
 export function Card({ children, level = 1, onPress, padded = true, accentEdge, style }: CardProps) {
   const body = (
     <View
       style={[
         styles.card,
-        { backgroundColor: LEVELS[level], padding: padded ? space.xl : 0 },
+        {
+          backgroundColor: levelColor(level),
+          padding: padded ? space.xl : 0,
+          borderWidth: 1,
+          borderColor: colors.border,
+        },
         accentEdge ? { borderLeftWidth: 5, borderLeftColor: accentEdge } : null,
-        level > 1 ? null : shadow.card,
+        level > 1 ? null : elevation('card'),
         style,
       ]}
     >
@@ -69,10 +71,10 @@ export function Section({ title, children, action, style }: SectionProps) {
         {action ? (
           <Pressable onPress={action.onPress} hitSlop={12} accessibilityRole="button">
             <View style={styles.sectionAction}>
-              <Text variant="small" color={colors.accent}>
+              <Text variant="small" color={colors.accentText}>
                 {action.label}
               </Text>
-              <Icon name="chevron" size={14} color={colors.accent} strokeWidth={2.6} />
+              <Icon name="chevron" size={14} color={colors.accentText} strokeWidth={2.6} />
             </View>
           </Pressable>
         ) : null}
@@ -153,7 +155,7 @@ export interface BadgeProps {
   filled?: boolean;
 }
 
-export function Badge({ label, color = colors.accent, filled }: BadgeProps) {
+export function Badge({ label, color = colors.accentText, filled }: BadgeProps) {
   return (
     <View
       style={[
@@ -196,7 +198,7 @@ export function EmptyState({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   card: {
     borderRadius: radius.xl,
     overflow: 'hidden',
@@ -251,4 +253,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: space.xs,
   },
-});
+}));

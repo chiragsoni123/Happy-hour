@@ -1,6 +1,8 @@
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import {
+  View,
+} from 'react-native';
 
 import { CustomerPicker } from '@/components/CustomerPicker';
 import { formatMoney } from '@/domain/money';
@@ -8,7 +10,7 @@ import { totalOutstanding } from '@/domain/ledger';
 import { relativeDayLabel, businessDayOf } from '@/domain/time';
 import { debtors } from '@/store/selectors';
 import { useDb } from '@/store/useStore';
-import { colors, space } from '@/theme';
+import { colors, space, themed } from '@/theme';
 import {
   Button,
   Card,
@@ -141,9 +143,9 @@ export default function Dues() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   hero: {
     backgroundColor: colors.accent,
     gap: space.xs,
   },
-});
+}));

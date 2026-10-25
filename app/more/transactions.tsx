@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
 import { View } from 'react-native';
 
+import { DateRangeFilter, useDateRange } from '@/components/DateRangeFilter';
 import { formatMoney } from '@/domain/money';
+import { inRange } from '@/domain/reporting';
 import { can } from '@/domain/permissions';
 import { businessDayOf, formatClock, relativeDayLabel } from '@/domain/time';
 import type { CheckoutMethod, Sale } from '@/domain/types';
@@ -39,6 +41,8 @@ export default function Transactions() {
 
   const [query, setQuery] = useState('');
   const [method, setMethod] = useState<MethodFilter>('ALL');
+  const filter = useDateRange('today');
+  const tradingDays = useMemo(() => [...new Set(db.sales.map((s) => s.business_day))], [db]);
   const [selected, setSelected] = useState<Sale | null>(null);
   const [reason, setReason] = useState('');
 
@@ -48,6 +52,7 @@ export default function Transactions() {
     const q = query.trim().toLowerCase();
     return db.sales
       .filter((s) => s.status !== 'OPEN')
+      .filter((s) => inRange(s.business_day, filter.range))
       .filter((s) => method === 'ALL' || s.checkout_method === method)
       .filter((s) => {
         if (!q) return true;
@@ -61,8 +66,8 @@ export default function Transactions() {
         );
       })
       .sort((a, b) => (b.completed_at ?? b.opened_at).localeCompare(a.completed_at ?? a.opened_at))
-      .slice(0, 60);
-  }, [db, query, method]);
+      .slice(0, 200);
+  }, [db, query, method, filter.range]);
 
   const items = selected ? db.sale_items.filter((i) => i.sale_id === selected.id) : [];
 
@@ -81,7 +86,9 @@ export default function Transactions() {
   return (
     <>
       <Screen>
-        <Header title="Transactions" eyebrow={`${sales.length} shown`} back />
+        <Header title="Transactions" eyebrow={`${filter.label} · ${sales.length} shown`} back />
+
+        <DateRangeFilter state={filter} availableDays={tradingDays} />
 
         <Field value={query} onChangeText={setQuery} placeholder="Bill number, customer, item, staff" icon="search" />
 

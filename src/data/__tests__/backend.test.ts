@@ -381,15 +381,15 @@ describe('inventory and concurrency', () => {
 describe('gaming sessions', () => {
   it('stops two staff starting the same console', async () => {
     const backend = await fresh();
-    await backend.startSession({ actorId: STAFF, resourceId: 'res_ps5_1' });
+    await backend.startSession({ actorId: STAFF, period: 'DAY', resourceId: 'res_ps5_1' });
     await expect(
-      backend.startSession({ actorId: OWNER, resourceId: 'res_ps5_1' }),
+      backend.startSession({ actorId: OWNER, period: 'DAY', resourceId: 'res_ps5_1' }),
     ).rejects.toMatchObject({ code: 'RESOURCE_BUSY' });
   });
 
   it('frees the console and bills the time when stopped', async () => {
     const backend = await fresh();
-    const started = await backend.startSession({ actorId: STAFF, resourceId: 'res_pool_1' });
+    const started = await backend.startSession({ actorId: STAFF, period: 'DAY', resourceId: 'res_pool_1' });
     const { db } = await backend.stopSession({ actorId: STAFF, sessionId: started.sessionId });
 
     expect(db.game_resources.find((r) => r.id === 'res_pool_1')?.status).toBe('AVAILABLE');
@@ -403,7 +403,7 @@ describe('gaming sessions', () => {
 
   it('cannot be stopped twice', async () => {
     const backend = await fresh();
-    const started = await backend.startSession({ actorId: STAFF, resourceId: 'res_ps5_2' });
+    const started = await backend.startSession({ actorId: STAFF, period: 'DAY', resourceId: 'res_ps5_2' });
     await backend.stopSession({ actorId: STAFF, sessionId: started.sessionId });
     await expect(
       backend.stopSession({ actorId: STAFF, sessionId: started.sessionId }),
@@ -412,7 +412,7 @@ describe('gaming sessions', () => {
 
   it('counts gaming revenue only once the bill is paid', async () => {
     const backend = await fresh();
-    const started = await backend.startSession({ actorId: STAFF, resourceId: 'res_ps5_3' });
+    const started = await backend.startSession({ actorId: STAFF, period: 'DAY', resourceId: 'res_ps5_3' });
     const stopped = await backend.stopSession({ actorId: STAFF, sessionId: started.sessionId });
     expect(dayTotals(stopped.db, DAY).revenue).toBe(0);
 
@@ -430,7 +430,7 @@ describe('gaming sessions', () => {
 
   it('keeps food and game time on one bill', async () => {
     const backend = await fresh();
-    const started = await backend.startSession({ actorId: STAFF, resourceId: 'res_ps5_1' });
+    const started = await backend.startSession({ actorId: STAFF, period: 'DAY', resourceId: 'res_ps5_1' });
     await backend.addProductToBill({
       actorId: STAFF,
       saleId: started.saleId,
@@ -451,7 +451,7 @@ describe('gaming sessions', () => {
 
   it('refuses checkout while the clock is still running', async () => {
     const backend = await fresh();
-    const started = await backend.startSession({ actorId: STAFF, resourceId: 'res_pool_2' });
+    const started = await backend.startSession({ actorId: STAFF, period: 'DAY', resourceId: 'res_pool_2' });
     await expect(
       backend.completeSale({
         actorId: STAFF,
@@ -460,6 +460,143 @@ describe('gaming sessions', () => {
         clientOpId: 'op-14',
       }),
     ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+});
+
+describe('manual game amounts', () => {
+  it('charges the meter when no amount is given', async () => {
+    const backend = await fresh();
+    const started = await backend.startSession({
+      actorId: STAFF,
+      period: 'DAY',
+      resourceId: 'res_pool_1',
+    });
+    const { db } = await backend.stopSession({ actorId: STAFF, sessionId: started.sessionId });
+    const session = db.gaming_sessions.find((s) => s.id === started.sessionId);
+    expect(session).toMatchObject({ amount: 4000, metered_amount: 4000, amount_source: 'METERED' });
+  });
+
+  it('charges what the staff member typed instead of what the clock said', async () => {
+    const backend = await fresh();
+    const started = await backend.startSession({
+      actorId: STAFF,
+      period: 'DAY',
+      resourceId: 'res_pool_1',
+    });
+    const { db } = await backend.stopSession({
+      actorId: STAFF,
+      sessionId: started.sessionId,
+      amount: 2500,
+    });
+
+    const session = db.gaming_sessions.find((s) => s.id === started.sessionId);
+    // The discount is visible: the meter's figure is kept beside what was charged.
+    expect(session).toMatchObject({ amount: 2500, metered_amount: 4000, amount_source: 'MANUAL' });
+    expect(db.sale_items.find((i) => i.session_id === started.sessionId)?.line_total).toBe(2500);
+    expect(db.sales.find((s) => s.id === started.saleId)?.total).toBe(2500);
+  });
+
+  it('bills the overridden figure, not the meter', async () => {
+    const backend = await fresh();
+    const started = await backend.startSession({
+      actorId: STAFF,
+      period: 'DAY',
+      resourceId: 'res_ps5_1',
+    });
+    await backend.stopSession({ actorId: STAFF, sessionId: started.sessionId, amount: 3000 });
+    const { db } = await backend.completeSale({
+      actorId: STAFF,
+      saleId: started.saleId,
+      method: 'CASH',
+      clientOpId: 'manual-1',
+    });
+    expect(dayTotals(db, DAY).gamingRevenue).toBe(3000);
+    expect(dayTotals(db, DAY).cashSales).toBe(3000);
+  });
+
+  it('corrects the amount while the bill is still open', async () => {
+    const backend = await fresh();
+    const started = await backend.startSession({
+      actorId: STAFF,
+      period: 'DAY',
+      resourceId: 'res_ps5_2',
+    });
+    await backend.stopSession({ actorId: STAFF, sessionId: started.sessionId });
+    const db = await backend.setGamingAmount({
+      actorId: STAFF,
+      sessionId: started.sessionId,
+      amount: 1500,
+    });
+    expect(db.sales.find((s) => s.id === started.saleId)?.total).toBe(1500);
+    expect(db.gaming_sessions.find((s) => s.id === started.sessionId)?.amount_source).toBe('MANUAL');
+  });
+
+  it('refuses to change a game once its bill has been paid', async () => {
+    const backend = await fresh();
+    const started = await backend.startSession({
+      actorId: STAFF,
+      period: 'DAY',
+      resourceId: 'res_ps5_3',
+    });
+    await backend.stopSession({ actorId: STAFF, sessionId: started.sessionId });
+    await backend.completeSale({
+      actorId: STAFF,
+      saleId: started.saleId,
+      method: 'CASH',
+      clientOpId: 'manual-2',
+    });
+    await expect(
+      backend.setGamingAmount({ actorId: STAFF, sessionId: started.sessionId, amount: 100 }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it('rejects a negative amount', async () => {
+    const backend = await fresh();
+    const started = await backend.startSession({
+      actorId: STAFF,
+      period: 'DAY',
+      resourceId: 'res_pool_2',
+    });
+    await expect(
+      backend.stopSession({ actorId: STAFF, sessionId: started.sessionId, amount: -100 }),
+    ).rejects.toMatchObject({ code: 'INVALID_AMOUNT' });
+  });
+});
+
+describe('day and night tariffs', () => {
+  it('snapshots the night rate onto a session started on it', async () => {
+    const backend = await fresh();
+    // Put the night rate somewhere different from the day rate.
+    await backend.updatePricingRule({
+      actorId: OWNER,
+      ruleId: 'rule_ps5_night',
+      patch: { rate_per_minute: 2000, minimum_charge: 10000 },
+    });
+
+    const started = await backend.startSession({
+      actorId: STAFF,
+      period: 'NIGHT',
+      resourceId: 'res_ps5_1',
+    });
+    const { db } = await backend.stopSession({ actorId: STAFF, sessionId: started.sessionId });
+    const session = db.gaming_sessions.find((s) => s.id === started.sessionId);
+    expect(session).toMatchObject({ period: 'NIGHT', rate_per_minute: 2000, amount: 10000 });
+  });
+
+  it('leaves a running session on the rate it started with', async () => {
+    const backend = await fresh();
+    const started = await backend.startSession({
+      actorId: STAFF,
+      period: 'DAY',
+      resourceId: 'res_ps5_1',
+    });
+    await backend.updatePricingRule({
+      actorId: OWNER,
+      ruleId: 'rule_ps5_day',
+      patch: { rate_per_minute: 9900 },
+    });
+    const { db } = await backend.stopSession({ actorId: STAFF, sessionId: started.sessionId });
+    expect(db.gaming_sessions.find((s) => s.id === started.sessionId)?.rate_per_minute).toBe(1000);
   });
 });
 
@@ -539,7 +676,7 @@ describe('cash reconciliation', () => {
 
   it('refuses to close while a game is running', async () => {
     const backend = await fresh();
-    await backend.startSession({ actorId: STAFF, resourceId: 'res_ps5_1' });
+    await backend.startSession({ actorId: STAFF, period: 'DAY', resourceId: 'res_ps5_1' });
     await expect(
       backend.closeDay({ actorId: OWNER, day: DAY, actualCash: 0 }),
     ).rejects.toMatchObject({ code: 'CONFLICT' });
@@ -617,6 +754,32 @@ describe('permissions', () => {
     await expect(
       backend.completeSale({ actorId: STAFF, saleId, method: 'CASH', clientOpId: 'op-16' }),
     ).resolves.toBeTruthy();
+  });
+});
+
+describe('removing a product', () => {
+  it('lets the owner take an item off the menu and put it back', async () => {
+    const backend = await fresh();
+    let db = await backend.archiveProduct({ actorId: OWNER, productId: 'prod_lighter' });
+    expect(product(db, 'prod_lighter').archived).toBe(true);
+    db = await backend.archiveProduct({ actorId: OWNER, productId: 'prod_lighter', restore: true });
+    expect(product(db, 'prod_lighter').archived).toBe(false);
+  });
+
+  it('is refused to a manager', async () => {
+    const backend = await fresh();
+    await expect(
+      backend.archiveProduct({ actorId: 'staff_manager', productId: 'prod_lighter' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('keeps a removed item on the sales it was already part of', async () => {
+    const backend = await fresh();
+    const saleId = await billWith(backend, 'prod_lighter');
+    await backend.completeSale({ actorId: STAFF, saleId, method: 'CASH', clientOpId: 'rm-1' });
+    const db = await backend.archiveProduct({ actorId: OWNER, productId: 'prod_lighter' });
+    expect(db.sale_items.some((i) => i.sale_id === saleId && i.product_id === 'prod_lighter')).toBe(true);
+    expect(dayTotals(db, DAY).revenue).toBe(2000);
   });
 });
 

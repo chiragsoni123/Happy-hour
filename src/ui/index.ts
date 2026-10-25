@@ -1,6 +1,7 @@
 export * from './Button';
 export * from './Field';
 export * from './Icon';
+export * from './Loader';
 export * from './Money';
 export * from './NumberPad';
 export * from './PaymentKeys';

@@ -3,7 +3,7 @@ import { View } from 'react-native';
 
 import { formatMoney, parseAmount } from '@/domain/money';
 import { can } from '@/domain/permissions';
-import { rateLabel } from '@/domain/pricing';
+import { rateLabel, TARIFF_LABEL } from '@/domain/pricing';
 import type { Product } from '@/domain/types';
 import { useActor, useDb, useStore } from '@/store/useStore';
 import { colors, space } from '@/theme';
@@ -44,8 +44,23 @@ export default function Products() {
 
   const [rate, setRate] = useState('');
   const [minimum, setMinimum] = useState('');
+  const [ruleLabel, setRuleLabel] = useState('');
 
   const canPrice = can(actor?.role, 'price.manage');
+  const canRemove = can(actor?.role, 'product.remove');
+
+  const removed = useMemo(
+    () => db.products.filter((p) => p.archived).sort((a, b) => a.name.localeCompare(b.name)),
+    [db],
+  );
+
+  const setRemoved = async (product: Product, restore: boolean) => {
+    const done = await run(
+      (backend, actorId) => backend.archiveProduct({ actorId, productId: product.id, restore }),
+      { success: restore ? `${product.name} is back on the menu` : `${product.name} removed` },
+    );
+    if (done) setEditing(null);
+  };
 
   const grouped = useMemo(
     () =>
@@ -102,8 +117,10 @@ export default function Products() {
   const openRule = (ruleId: string) => {
     const found = db.pricing_rules.find((r) => r.id === ruleId);
     if (!found) return;
+    const type = db.game_types.find((t) => t.id === found.game_type_id);
     setRate(String(Math.round(found.rate_per_minute / 100)));
     setMinimum(String(Math.round(found.minimum_charge / 100)));
+    setRuleLabel(`${type?.name ?? found.name} · ${TARIFF_LABEL[found.period]}`);
     setRule(ruleId);
   };
 
@@ -132,23 +149,42 @@ export default function Products() {
         <Button label="New product" icon="plus" tone="accent" full onPress={() => openProduct('new')} />
 
         <Section title="Game rates">
-          <Card level={2} padded={false} style={{ paddingHorizontal: space.xl }}>
-            {db.pricing_rules.map((r, index) => {
-              const type = db.game_types.find((t) => t.id === r.game_type_id);
+          {db.game_types
+            .slice()
+            .sort((a, b) => a.sort_order - b.sort_order)
+            .map((type) => {
+              const rules = db.pricing_rules
+                .filter((r) => r.game_type_id === type.id && r.resource_id === null)
+                .sort((a, b) => a.period.localeCompare(b.period));
+              if (rules.length === 0) return null;
               return (
-                <View key={r.id}>
-                  {index > 0 ? <Divider /> : null}
-                  <Row
-                    title={type?.name ?? r.name}
-                    subtitle={`${rateLabel(r)} · minimum ${formatMoney(r.minimum_charge)}`}
-                    value={canPrice ? 'Edit' : undefined}
-                    valueColor={colors.accent}
-                    onPress={canPrice ? () => openRule(r.id) : undefined}
-                  />
-                </View>
+                <Card
+                  key={type.id}
+                  level={2}
+                  padded={false}
+                  style={{ paddingHorizontal: space.xl, marginBottom: space.md }}
+                >
+                  {rules.map((r, index) => (
+                    <View key={r.id}>
+                      {index > 0 ? <Divider /> : null}
+                      <Row
+                        title={`${type.name} · ${TARIFF_LABEL[r.period]}`}
+                        subtitle={`${rateLabel(r)}${
+                          r.minimum_charge > 0 ? ` · minimum ${formatMoney(r.minimum_charge)}` : ''
+                        }`}
+                        value={canPrice ? 'Edit' : undefined}
+                        valueColor={colors.accentText}
+                        onPress={canPrice ? () => openRule(r.id) : undefined}
+                      />
+                    </View>
+                  ))}
+                </Card>
               );
             })}
-          </Card>
+          <Text variant="small" color={colors.textFaint}>
+            Staff pick day or night when they start a table. The switch is manual on purpose —
+            the cafe decides when the night rate begins, not the clock.
+          </Text>
         </Section>
 
         {grouped.map((group) =>
@@ -162,7 +198,7 @@ export default function Products() {
                       title={product.name}
                       subtitle={product.track_stock ? `${product.stock} in stock` : 'Not stock tracked'}
                       value={formatMoney(product.price)}
-                      valueColor={colors.accent}
+                      valueColor={colors.accentText}
                       onPress={() => openProduct(product)}
                     />
                   </View>
@@ -171,6 +207,25 @@ export default function Products() {
             </Section>
           ),
         )}
+
+        {canRemove && removed.length > 0 ? (
+          <Section title={`Removed from the menu (${removed.length})`}>
+            <Card level={2} padded={false} style={{ paddingHorizontal: space.xl }}>
+              {removed.map((product, index) => (
+                <View key={product.id}>
+                  {index > 0 ? <Divider /> : null}
+                  <Row
+                    title={product.name}
+                    subtitle="Hidden from sales and stock. Past sales still show it."
+                    value="Restore"
+                    valueColor={colors.brand}
+                    onPress={() => void setRemoved(product, true)}
+                  />
+                </View>
+              ))}
+            </Card>
+          </Section>
+        ) : null}
       </Screen>
 
       <Sheet
@@ -179,15 +234,27 @@ export default function Products() {
         eyebrow={editing === 'new' ? 'New' : 'Edit'}
         title={editing === 'new' ? 'Add a product' : name}
         footer={
-          <Button
-            label="Save product"
-            tone="accent"
-            size="lg"
-            full
-            loading={busy}
-            disabled={!name.trim() || parseAmount(price) === null}
-            onPress={() => void saveProduct()}
-          />
+          <>
+            <Button
+              label="Save product"
+              tone="accent"
+              size="lg"
+              full
+              loading={busy}
+              disabled={!name.trim() || parseAmount(price) === null}
+              onPress={() => void saveProduct()}
+            />
+            {canRemove && editing && editing !== 'new' ? (
+              <Button
+                label="Remove from menu"
+                icon="trash"
+                tone="ghost"
+                full
+                loading={busy}
+                onPress={() => void setRemoved(editing, false)}
+              />
+            ) : null}
+          </>
         }
       >
         <Field label="Name" value={name} onChangeText={setName} placeholder="Coke" />
@@ -227,7 +294,7 @@ export default function Products() {
         visible={!!rule}
         onClose={() => setRule(null)}
         eyebrow="Applies to new sessions only"
-        title="Game rate"
+        title={ruleLabel || 'Game rate'}
         footer={
           <Button
             label="Save rate"

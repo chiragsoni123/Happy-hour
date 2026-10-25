@@ -1,13 +1,16 @@
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import {
+  Pressable,
+  View,
+} from 'react-native';
 
 import { authMode } from '@/data/auth';
 import { ROLE_BLURB, ROLE_LABEL } from '@/domain/permissions';
 import type { Profile } from '@/domain/types';
 import { useStore } from '@/store/useStore';
-import { colors, radius, shadow, space } from '@/theme';
+import { colors, elevation, radius, space, themed, useTheme } from '@/theme';
 import { Button, Card, Eyebrow, Field, Icon, Screen, Text } from '@/ui';
 
 /**
@@ -18,28 +21,28 @@ import { Button, Card, Eyebrow, Field, Icon, Screen, Text } from '@/ui';
  * "who collected this money?" unanswerable, which is the question the app exists for.
  */
 export default function SignIn() {
+  useTheme();
   const mode = useMemo(() => authMode(), []);
   return mode === 'password' ? <PasswordSignIn /> : <PinSignIn />;
 }
 
 // ------------------------------------------------------------------ Supabase
 
+type Mode = 'signin' | 'signup' | 'forgot' | 'sent';
+
 function PasswordSignIn() {
   const router = useRouter();
   const signInWithPassword = useStore((s) => s.signInWithPassword);
   const signUp = useStore((s) => s.signUp);
+  const requestPasswordReset = useStore((s) => s.requestPasswordReset);
 
-  const [creating, setCreating] = useState(false);
+  const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const submit = async () => {
-    setBusy(true);
-    const ok = creating
-      ? await signUp(email, password, fullName)
-      : await signInWithPassword(email, password);
+  const landed = (ok: boolean) => {
     setBusy(false);
     if (ok) {
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -49,13 +52,51 @@ function PasswordSignIn() {
     }
   };
 
-  const ready = email.trim().length > 3 && password.length >= 6 && (!creating || !!fullName.trim());
+  const submit = async () => {
+    setBusy(true);
+    switch (mode) {
+      case 'signin':
+        landed(await signInWithPassword(email, password));
+        return;
+      case 'signup':
+        landed(await signUp(email, password, fullName));
+        return;
+      case 'forgot':
+      case 'sent': {
+        const sent = await requestPasswordReset(email);
+        setBusy(false);
+        if (sent) setMode('sent');
+        return;
+      }
+    }
+  };
+
+  const emailOk = email.trim().length > 3;
+  const passwordOk = password.length >= 6;
+  const ready =
+    mode === 'forgot' || mode === 'sent'
+      ? emailOk
+      : emailOk && passwordOk && (mode !== 'signup' || !!fullName.trim());
+
+  const subtitle: Record<Mode, string> = {
+    signin: 'Sign in to start your shift',
+    signup: 'Create your account',
+    forgot: 'We will email you a link',
+    sent: 'Check that inbox on this phone',
+  };
+
+  const action: Record<Mode, string> = {
+    signin: 'Sign in',
+    signup: 'Create account',
+    forgot: 'Send link',
+    sent: 'Send it again',
+  };
 
   return (
     <Screen contentStyle={{ gap: space.xl }}>
-      <Brand subtitle={creating ? 'Create your account' : 'Sign in to start your shift'} />
+      <Brand subtitle={subtitle[mode]} />
 
-      {creating ? (
+      {mode === 'signup' ? (
         <Field
           label="Your name"
           value={fullName}
@@ -73,17 +114,30 @@ function PasswordSignIn() {
         keyboardType="email-address"
         icon="people"
       />
-      <Field
-        label="Password"
-        value={password}
-        onChangeText={setPassword}
-        placeholder="At least 6 characters"
-        secure
-        icon="lock"
-      />
+
+      {mode === 'sent' ? (
+        <Card level={2} accentEdge={colors.accent} style={{ gap: space.xs }}>
+          <Text variant="bodyStrong">Tap the link in the email on this phone.</Text>
+          <Text variant="small" color={colors.textMuted}>
+            It opens the app on a screen to choose a new password. The link only works on
+            the phone that asked for it, and only for an hour.
+          </Text>
+        </Card>
+      ) : null}
+
+      {mode === 'signin' || mode === 'signup' ? (
+        <Field
+          label="Password"
+          value={password}
+          onChangeText={setPassword}
+          placeholder="At least 6 characters"
+          secure
+          icon="lock"
+        />
+      ) : null}
 
       <Button
-        label={creating ? 'Create account' : 'Sign in'}
+        label={action[mode]}
         tone="accent"
         size="lg"
         full
@@ -92,20 +146,37 @@ function PasswordSignIn() {
         onPress={() => void submit()}
       />
 
-      <Pressable onPress={() => setCreating((c) => !c)} hitSlop={12} accessibilityRole="button">
-        <Text variant="small" color={colors.textMuted} align="center">
-          {creating ? 'I already have an account' : 'First time here? Create an account'}
-        </Text>
-      </Pressable>
+      {mode === 'signin' ? (
+        <>
+          <Pressable onPress={() => setMode('forgot')} hitSlop={12} accessibilityRole="button">
+            <Text variant="small" color={colors.textMuted} align="center">
+              Forgot your password?
+            </Text>
+          </Pressable>
+          <Pressable onPress={() => setMode('signup')} hitSlop={12} accessibilityRole="button">
+            <Text variant="small" color={colors.textMuted} align="center">
+              First time here? Create an account
+            </Text>
+          </Pressable>
+        </>
+      ) : (
+        <Pressable onPress={() => setMode('signin')} hitSlop={12} accessibilityRole="button">
+          <Text variant="small" color={colors.textMuted} align="center">
+            Back to sign in
+          </Text>
+        </Pressable>
+      )}
 
-      <Card level={2} style={{ gap: space.sm }}>
-        <Eyebrow>How accounts work</Eyebrow>
-        <Text variant="small" color={colors.textMuted}>
-          The first account created becomes the owner. Everyone after that starts as staff, and
-          the owner sets their role in More, Staff. Each person signs in as themselves so the
-          books can always say who took the money.
-        </Text>
-      </Card>
+      {mode === 'signin' || mode === 'signup' ? (
+        <Card level={2} style={{ gap: space.sm }}>
+          <Eyebrow>How accounts work</Eyebrow>
+          <Text variant="small" color={colors.textMuted}>
+            The first account created becomes the owner. Everyone after that starts as staff, and
+            the owner sets their role in More, Staff. Each person signs in as themselves so the
+            books can always say who took the money.
+          </Text>
+        </Card>
+      ) : null}
     </Screen>
   );
 }
@@ -160,7 +231,7 @@ function PinSignIn() {
             <Card key={profile.id} level={2} onPress={() => setSelected(profile)}>
               <View style={styles.staffRow}>
                 <View style={styles.avatar}>
-                  <Text variant="heading" color={colors.accent}>
+                  <Text variant="heading" color={colors.accentText}>
                     {initials(profile.full_name)}
                   </Text>
                 </View>
@@ -251,7 +322,7 @@ function initials(name: string): string {
     .join('');
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   mark: {
     width: 56,
     height: 56,
@@ -260,7 +331,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: space.sm,
-    ...shadow.card,
+    ...elevation('card'),
   },
   staffRow: {
     flexDirection: 'row',
@@ -296,8 +367,10 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     height: 64,
     borderRadius: radius.lg,
-    backgroundColor: colors.surfaceRaised,
+    backgroundColor: colors.surfaceHigh,
+    borderWidth: 1,
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
-});
+}));

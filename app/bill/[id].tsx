@@ -1,18 +1,25 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  Pressable,
+  ScrollView,
+  View,
+} from 'react-native';
 
 import { CustomerPicker } from '@/components/CustomerPicker';
 import { DueConfirmSheet, UpiConfirmSheet } from '@/components/CheckoutSheets';
+import { GameAmountSheet } from '@/components/GameAmountSheet';
 import { balanceOf } from '@/domain/ledger';
 import { formatMoney } from '@/domain/money';
 import { can } from '@/domain/permissions';
 import { formatClock, formatDuration, formatStopwatch, secondsBetween } from '@/domain/time';
+import { TARIFF_LABEL } from '@/domain/pricing';
 import type { CheckoutMethod, ID, Product } from '@/domain/types';
 import { useNow, useOpId } from '@/hooks/useNow';
+import { useTariff } from '@/hooks/useTariff';
 import { billView, catalogue, resourceBoard } from '@/store/selectors';
 import { useActor, useDb, useStore } from '@/store/useStore';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themed } from '@/theme';
 import {
   Badge,
   Button,
@@ -26,6 +33,7 @@ import {
   Money,
   PaymentKeys,
   Screen,
+  Segmented,
   Sheet,
   Text,
 } from '@/ui';
@@ -53,6 +61,10 @@ export default function BillScreen() {
   const [pickingCustomer, setPickingCustomer] = useState(false);
   const [pendingMethod, setPendingMethod] = useState<CheckoutMethod | null>(null);
   const [addingGame, setAddingGame] = useState(false);
+  /** Session id whose charge is being set: on stopping it, or correcting it afterwards. */
+  const [stoppingId, setStoppingId] = useState<ID | null>(null);
+  const [correctingId, setCorrectingId] = useState<ID | null>(null);
+  const { period, setPeriod } = useTariff();
 
   /**
    * Checkout and discard both finish the bill. Dismissing returns to the screen the bill
@@ -80,6 +92,23 @@ export default function BillScreen() {
 
   const total = bill?.runningTotal ?? 0;
   const hasRunningGame = (bill?.activeSessions.length ?? 0) > 0;
+
+  /**
+   * A bill is either a table's or the counter's, never both in the staff member's head.
+   * Table bills start from Games; counter sales start from the Sale button. Telling them
+   * apart loudly is what stops a walk-in's crisps landing on somebody's PS5 tab.
+   */
+  const tableLabels = useMemo(() => {
+    if (!bill) return [];
+    const ids = new Set(
+      db.gaming_sessions
+        .filter((g) => g.sale_id === bill.sale.id && g.status !== 'VOIDED')
+        .map((g) => g.resource_id),
+    );
+    return db.game_resources.filter((r) => ids.has(r.id)).map((r) => r.label);
+  }, [db, bill]);
+  const isTableBill = tableLabels.length > 0;
+  const billName = isTableBill ? `${tableLabels.join(' + ')}'s bill` : 'Counter sale';
   const customerBalance = bill?.customer ? balanceOf(db.due_transactions, bill.customer.id) : 0;
 
   /** Creates the bill lazily on the first tap, then adds the product to it. */
@@ -120,12 +149,30 @@ export default function BillScreen() {
       setSaleId(target);
     }
     await run((backend, actorId) =>
-      backend.startSession({ actorId, resourceId, saleId: target, customerId: bill?.customer?.id ?? null }),
+      backend.startSession({
+        actorId,
+        resourceId,
+        period,
+        saleId: target,
+        customerId: bill?.customer?.id ?? null,
+      }),
     );
   };
 
-  const stopGame = async (sessionId: ID) => {
-    await run((backend, actorId) => backend.stopSession({ actorId, sessionId }));
+  const stopGame = async (amount: number) => {
+    const sessionId = stoppingId;
+    if (!sessionId) return;
+    await run((backend, actorId) => backend.stopSession({ actorId, sessionId, amount }));
+    setStoppingId(null);
+  };
+
+  const correctGame = async (amount: number) => {
+    const sessionId = correctingId;
+    if (!sessionId) return;
+    await run((backend, actorId) => backend.setGamingAmount({ actorId, sessionId, amount }), {
+      success: `Game time set to ${formatMoney(amount)}`,
+    });
+    setCorrectingId(null);
   };
 
   const pick = (method: CheckoutMethod) => {
@@ -186,13 +233,21 @@ export default function BillScreen() {
   };
 
   const availableResources = board.filter((v) => v.resource.status === 'AVAILABLE');
+  const stopSession = bill?.activeSessions.find((v) => v.session.id === stoppingId) ?? null;
+  const correctSession = correctingId
+    ? (db.gaming_sessions.find((s) => s.id === correctingId) ?? null)
+    : null;
 
   return (
     <>
       <Screen scroll={false} style={{ paddingBottom: 0 }} contentStyle={{ flex: 1, gap: space.lg }}>
         <Header
-          title={bill ? `Bill #${bill.sale.number}` : 'New sale'}
-          eyebrow={bill ? `Opened ${formatClock(bill.sale.opened_at)}` : 'Tap items to add them'}
+          title={bill ? billName : 'New counter sale'}
+          eyebrow={
+            bill
+              ? `Bill #${bill.sale.number} · opened ${formatClock(bill.sale.opened_at)}`
+              : 'Tap what they bought, then tap how they paid'
+          }
           back
           right={
             saleId ? (
@@ -207,6 +262,25 @@ export default function BillScreen() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ gap: space.lg, paddingBottom: space.lg }}
         >
+          {isTableBill ? (
+            <Card level={2} accentEdge={colors.accent} style={styles.identity}>
+              <Icon name="gamepad" size={20} color={colors.accentText} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text variant="bodyStrong">Everything here goes on {tableLabels.join(' + ')}</Text>
+                <Text variant="small" color={colors.textMuted}>
+                  Selling to someone else? Start a separate sale.
+                </Text>
+              </View>
+              <Button
+                label="New sale"
+                icon="plus"
+                tone="neutral"
+                size="sm"
+                onPress={() => router.push('/bill/new')}
+              />
+            </Card>
+          ) : null}
+
           {bill && (bill.items.length > 0 || bill.activeSessions.length > 0) ? (
             <Card level={2} style={{ gap: space.sm }}>
               <View style={styles.billHead}>
@@ -216,7 +290,7 @@ export default function BillScreen() {
                   accessibilityRole="button"
                   style={styles.customerChip}
                 >
-                  <Icon name="people" size={16} color={bill.customer ? colors.accent : colors.textFaint} />
+                  <Icon name="people" size={16} color={bill.customer ? colors.accentText : colors.textFaint} />
                   <Text variant="small" color={bill.customer ? colors.text : colors.textFaint}>
                     {bill.customer?.name ?? 'Add customer'}
                   </Text>
@@ -230,7 +304,7 @@ export default function BillScreen() {
                 <View key={view.session.id} style={styles.liveRow}>
                   <View style={{ flex: 1, gap: 2 }}>
                     <Text variant="bodyStrong">{view.resource.label}</Text>
-                    <Text variant="small" color={colors.accent} tabular>
+                    <Text variant="small" color={colors.accentText} tabular>
                       {formatStopwatch(secondsBetween(view.session.started_at, now))} running ·{' '}
                       {formatMoney(view.priced.amount)}
                     </Text>
@@ -240,8 +314,7 @@ export default function BillScreen() {
                     icon="stop"
                     tone="accent"
                     size="sm"
-                    loading={busy}
-                    onPress={() => void stopGame(view.session.id)}
+                    onPress={() => setStoppingId(view.session.id)}
                   />
                 </View>
               ))}
@@ -254,7 +327,7 @@ export default function BillScreen() {
                       <Text variant="bodyStrong">{item.name}</Text>
                       <Text variant="small" color={colors.textMuted}>
                         {item.kind === 'GAMING'
-                          ? `${formatDuration(item.quantity)} at ${formatMoney(item.unit_price)}/min`
+                          ? gamingSubtitle(db, item.session_id, item.quantity)
                           : `${item.quantity} × ${formatMoney(item.unit_price)}`}
                       </Text>
                     </View>
@@ -266,6 +339,13 @@ export default function BillScreen() {
                         </Text>
                         <StepButton icon="plus" onPress={() => void changeQty(item.id, item.quantity + 1)} />
                       </View>
+                    ) : item.session_id ? (
+                      <Button
+                        label="Edit"
+                        tone="ghost"
+                        size="sm"
+                        onPress={() => setCorrectingId(item.session_id)}
+                      />
                     ) : null}
                     <Money value={item.line_total} variant="bodyStrong" />
                   </View>
@@ -275,21 +355,23 @@ export default function BillScreen() {
           ) : (
             <EmptyState
               icon="receipt"
-              title="Empty bill"
-              detail="Tap a product below, or add game time to this bill."
+              title="Nothing on it yet"
+              detail="Tap a product below to add it. Games are started from the Games tab."
             />
           )}
 
-          <View style={styles.toolRow}>
-            <Button
-              label="Add game time"
-              icon="gamepad"
-              tone="ghost"
-              size="sm"
-              onPress={() => setAddingGame(true)}
-              disabled={!can(actor?.role, 'session.start') || availableResources.length === 0}
-            />
-          </View>
+          {isTableBill ? (
+            <View style={styles.toolRow}>
+              <Button
+                label="Add another table to this bill"
+                icon="gamepad"
+                tone="ghost"
+                size="sm"
+                onPress={() => setAddingGame(true)}
+                disabled={!can(actor?.role, 'session.start') || availableResources.length === 0}
+              />
+            </View>
+          ) : null}
 
           <Field value={query} onChangeText={setQuery} placeholder="Search products" icon="search" />
 
@@ -356,12 +438,48 @@ export default function BillScreen() {
         onConfirm={() => void checkout('DUE')}
       />
 
+      <GameAmountSheet
+        visible={!!stopSession}
+        onClose={() => setStoppingId(null)}
+        onConfirm={(amount) => void stopGame(amount)}
+        busy={busy}
+        mode="stop"
+        resourceLabel={stopSession?.resource.label ?? ''}
+        metered={stopSession?.priced.amount ?? 0}
+        minutes={stopSession?.priced.billedMinutes ?? 0}
+        ratePerMinute={stopSession?.session.rate_per_minute ?? 0}
+        period={stopSession?.session.period ?? 'DAY'}
+      />
+
+      <GameAmountSheet
+        visible={!!correctSession}
+        onClose={() => setCorrectingId(null)}
+        onConfirm={(amount) => void correctGame(amount)}
+        busy={busy}
+        mode="correct"
+        resourceLabel={
+          db.game_resources.find((r) => r.id === correctSession?.resource_id)?.label ?? 'Game time'
+        }
+        metered={correctSession?.metered_amount ?? correctSession?.amount ?? 0}
+        minutes={correctSession?.billed_minutes ?? 0}
+        ratePerMinute={correctSession?.rate_per_minute ?? 0}
+        period={correctSession?.period ?? 'DAY'}
+      />
+
       <Sheet
         visible={addingGame}
         onClose={() => setAddingGame(false)}
-        eyebrow="Same bill"
+        eyebrow={`${TARIFF_LABEL[period]} rate`}
         title="Add game time"
       >
+        <Segmented
+          options={[
+            { value: 'DAY', label: 'Day rate' },
+            { value: 'NIGHT', label: 'Night rate' },
+          ]}
+          value={period}
+          onChange={(next) => setPeriod(next as 'DAY' | 'NIGHT')}
+        />
         {availableResources.length === 0 ? (
           <EmptyState icon="gamepad" title="Everything is busy" />
         ) : (
@@ -376,7 +494,7 @@ export default function BillScreen() {
                 <Icon
                   name={view.gameType.glyph === 'pool' ? 'pool' : 'gamepad'}
                   size={22}
-                  color={colors.accent}
+                  color={colors.accentText}
                 />
                 <Text variant="bodyStrong">{view.resource.label}</Text>
               </Pressable>
@@ -386,6 +504,23 @@ export default function BillScreen() {
       </Sheet>
     </>
   );
+}
+
+/**
+ * A game line reads by what was charged, and says so when that differs from the meter —
+ * a discount should be visible on the bill, not buried in the audit log.
+ */
+function gamingSubtitle(
+  db: ReturnType<typeof useDb>,
+  sessionId: ID | null,
+  minutes: number,
+): string {
+  const session = sessionId ? db.gaming_sessions.find((s) => s.id === sessionId) : undefined;
+  const duration = formatDuration(minutes);
+  if (!session || session.amount_source !== 'MANUAL' || session.metered_amount === null) {
+    return duration;
+  }
+  return `${duration} · meter said ${formatMoney(session.metered_amount)}`;
 }
 
 function StepButton({ icon, onPress }: { icon: 'plus' | 'minus'; onPress: () => void }) {
@@ -436,7 +571,7 @@ function ProductTile({
           </View>
         ) : null}
       </View>
-      <Money value={product.price} variant="heading" color={colors.accent} />
+      <Money value={product.price} variant="heading" color={colors.accentText} />
       {product.track_stock ? (
         <Text variant="small" color={out ? colors.danger : colors.textFaint}>
           {out ? 'Out of stock' : `${product.stock} left`}
@@ -446,7 +581,12 @@ function ProductTile({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
+  identity: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+  },
   billHead: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -485,7 +625,7 @@ const styles = StyleSheet.create({
     height: 32,
     borderRadius: radius.sm,
     borderWidth: 1.5,
-    borderColor: colors.hairline,
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -504,7 +644,7 @@ const styles = StyleSheet.create({
     minHeight: 96,
     borderRadius: radius.lg,
     borderWidth: 1.5,
-    borderColor: colors.hairline,
+    borderColor: colors.border,
     backgroundColor: colors.surface,
     padding: space.md,
     justifyContent: 'space-between',
@@ -529,7 +669,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     borderRadius: radius.lg,
     borderWidth: 1.5,
-    borderColor: colors.hairline,
+    borderColor: colors.border,
     backgroundColor: colors.surfaceRaised,
     padding: space.lg,
     gap: space.sm,
@@ -547,4 +687,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-});
+}));

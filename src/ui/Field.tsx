@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   Pressable,
-  StyleSheet,
   TextInput,
   View,
   type KeyboardTypeOptions,
@@ -9,7 +8,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { colors, radius, space, type } from '@/theme';
+import { colors, elevation, radius, space, type, themed } from '@/theme';
 
 import { Icon, type IconName } from './Icon';
 import { Eyebrow, Text } from './Text';
@@ -141,15 +140,15 @@ export function Toggle({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   box: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.md,
-    backgroundColor: colors.surfaceRaised,
+    backgroundColor: colors.surfaceHigh,
     borderRadius: radius.lg,
     borderWidth: 1.5,
-    borderColor: colors.hairline,
+    borderColor: colors.border,
     paddingHorizontal: space.lg,
     minHeight: 56,
   },
@@ -159,7 +158,7 @@ const styles = StyleSheet.create({
   },
   segmented: {
     flexDirection: 'row',
-    backgroundColor: colors.surfaceRaised,
+    backgroundColor: colors.surfaceHigh,
     borderRadius: radius.pill,
     padding: 4,
     gap: 4,
@@ -173,6 +172,7 @@ const styles = StyleSheet.create({
   },
   segmentActive: {
     backgroundColor: colors.accent,
+    ...elevation('card'),
   },
   toggleRow: {
     flexDirection: 'row',
@@ -194,4 +194,4 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     backgroundColor: colors.bg,
   },
-});
+}));

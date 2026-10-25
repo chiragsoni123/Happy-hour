@@ -5,14 +5,14 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.happyhour.gamezone"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#070B06",
+        "backgroundColor": "#040B1E",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -31,12 +31,13 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#070B06",
+          "backgroundColor": "#040B1E",
           "image": "./assets/splash-icon.png",
-          "imageWidth": 180,
+          "imageWidth": 200,
           "resizeMode": "contain"
         }
-      ]
+      ],
+      "expo-status-bar"
     ],
     "scheme": "happyhour",
     "backgroundColor": "#070B06",
@@ -45,8 +46,11 @@
       "typedRoutes": true
     },
     "extra": {
-      "supabaseUrl": "https://pjmizuqxdwvpkkszxfav.supabase.co",
-      "supabasePublishableKey": "sb_publishable_scNp9T7TVrUcIsiSz-BYKA_kZgdHnXb"
-    }
+      "router": {},
+      "eas": {
+        "projectId": "7e50bb02-7bb9-4505-ac40-c2ae45ec3f45"
+      }
+    },
+    "owner": "chirag1007"
   }
 }

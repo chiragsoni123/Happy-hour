@@ -1,9 +1,11 @@
-import { StyleSheet, View } from 'react-native';
+import {
+  View,
+} from 'react-native';
 
 import { previewSettlement } from '@/domain/ledger';
 import { formatMoney, type Paise } from '@/domain/money';
 import type { Customer } from '@/domain/types';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themed } from '@/theme';
 import { Button, Card, Eyebrow, Icon, Money, Sheet, Text } from '@/ui';
 
 export interface UpiConfirmSheetProps {
@@ -54,7 +56,7 @@ export function UpiConfirmSheet({
     >
       <Card level={2} style={styles.amountCard}>
         <Eyebrow>Amount to collect</Eyebrow>
-        <Money value={amount} variant="hero" color={colors.upi} fancySymbol />
+        <Money value={amount} variant="hero" color={colors.upiText} fancySymbol />
         {vpa ? (
           <View style={styles.vpa}>
             <Icon name="upi" size={16} color={colors.textMuted} />
@@ -190,14 +192,14 @@ function LedgerLine({
       <Money
         value={value}
         variant={big ? 'title' : 'bodyStrong'}
-        color={accent ? colors.accent : colors.text}
+        color={accent ? colors.accentText : colors.text}
         sign={accent && value > 0}
       />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   amountCard: {
     alignItems: 'center',
     gap: space.sm,
@@ -221,4 +223,4 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: colors.hairline,
   },
-});
+}));

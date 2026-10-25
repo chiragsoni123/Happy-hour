@@ -9,7 +9,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { colors, HIT, radius, shadow, space } from '@/theme';
+import { colors, elevation, HIT, radius, space } from '@/theme';
 
 import { Icon, type IconName } from './Icon';
 import { Text } from './Text';
@@ -32,15 +32,16 @@ export interface ButtonProps {
   style?: StyleProp<ViewStyle>;
 }
 
-const TONES: Record<ButtonTone, { bg: string; fg: string; border?: string }> = {
+/** Built per render so the live palette applies. */
+const tones = (): Record<ButtonTone, { bg: string; fg: string; border?: string }> => ({
   accent: { bg: colors.accent, fg: colors.onAccent },
   brand: { bg: colors.brand, fg: '#04160A' },
   neutral: { bg: colors.surfaceHigh, fg: colors.text },
   ghost: { bg: 'transparent', fg: colors.text, border: colors.hairline },
   danger: { bg: colors.danger, fg: '#1B0400' },
   warn: { bg: colors.warn, fg: '#231500' },
-  chalk: { bg: colors.due, fg: colors.onAccent },
-};
+  chalk: { bg: colors.due, fg: colors.onDue },
+});
 
 const SIZES: Record<ButtonSize, { h: number; px: number; variant: 'small' | 'bodyStrong' | 'heading' }> = {
   sm: { h: 40, px: space.lg, variant: 'small' },
@@ -62,7 +63,7 @@ export function Button({
   caption,
   style,
 }: ButtonProps) {
-  const palette = TONES[tone];
+  const palette = tones()[tone];
   const dims = SIZES[size];
   const inert = disabled || loading;
 
@@ -91,7 +92,7 @@ export function Button({
           transform: [{ scale: pressed && !inert ? 0.98 : 1 }],
           alignSelf: full ? 'stretch' : 'flex-start',
         },
-        tone !== 'ghost' && shadow.card,
+        tone !== 'ghost' && elevation('card'),
         style,
       ]}
     >

@@ -3,15 +3,17 @@ import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { can } from '@/domain/permissions';
-import { rateLabel, resolvePricingRule } from '@/domain/pricing';
+import { rateLabel, resolvePricingRule, TARIFF_LABEL } from '@/domain/pricing';
 import {
   formatClock,
   formatDuration,
   formatStopwatch,
   secondsBetween,
 } from '@/domain/time';
-import type { GameResource, ResourceStatus } from '@/domain/types';
+import type { GameResource, ResourceStatus, TariffPeriod } from '@/domain/types';
+import { GameAmountSheet } from '@/components/GameAmountSheet';
 import { useNow } from '@/hooks/useNow';
+import { useTariff } from '@/hooks/useTariff';
 import { resourceBoard, type ResourceView } from '@/store/selectors';
 import { useActor, useDb, useStore } from '@/store/useStore';
 import { colors, radius, space, statusColors } from '@/theme';
@@ -44,6 +46,8 @@ export default function Games() {
 
   const [selected, setSelected] = useState<ResourceView | null>(null);
   const [manageMode, setManageMode] = useState(false);
+  const [stopping, setStopping] = useState<ResourceView | null>(null);
+  const { period, setPeriod } = useTariff();
 
   const board = useMemo(() => resourceBoard(db, now), [db, now]);
   const live = board.filter((v) => v.session);
@@ -54,17 +58,26 @@ export default function Games() {
   const start = async () => {
     if (!current) return;
     const result = await run((backend, actorId) =>
-      backend.startSession({ actorId, resourceId: current.resource.id }),
+      backend.startSession({ actorId, resourceId: current.resource.id, period }),
     );
     setSelected(null);
     if (result) router.push(`/bill/${result.saleId}`);
   };
 
-  const stop = async () => {
+  /** Stopping opens the amount sheet rather than charging the meter outright. */
+  const openStop = () => {
     if (!current?.session) return;
-    const sessionId = current.session.session.id;
-    const result = await run((backend, actorId) => backend.stopSession({ actorId, sessionId }));
+    setStopping(current);
     setSelected(null);
+  };
+
+  const stop = async (amount: number) => {
+    const sessionId = stopping?.session?.session.id;
+    if (!sessionId) return;
+    const result = await run((backend, actorId) =>
+      backend.stopSession({ actorId, sessionId, amount }),
+    );
+    setStopping(null);
     if (result) router.push(`/bill/${result.saleId}`);
   };
 
@@ -87,10 +100,33 @@ export default function Games() {
         </View>
         {canManage ? (
           <Pressable onPress={() => setManageMode((m) => !m)} hitSlop={12} accessibilityRole="button">
-            <Badge label={manageMode ? 'Done' : 'Manage'} color={manageMode ? colors.accent : colors.textFaint} />
+            <Badge label={manageMode ? 'Done' : 'Manage'} color={manageMode ? colors.accentText : colors.textFaint} />
           </Pressable>
         ) : null}
       </View>
+
+      <Card level={2} style={{ gap: space.sm }}>
+        <View style={styles.head}>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Eyebrow>Charging</Eyebrow>
+            <Text variant="bodyStrong">{TARIFF_LABEL[period]} rate</Text>
+          </View>
+          <View style={{ width: 168 }}>
+            <Segmented
+              options={[
+                { value: 'DAY', label: 'Day' },
+                { value: 'NIGHT', label: 'Night' },
+              ]}
+              value={period}
+              onChange={(next) => setPeriod(next as TariffPeriod)}
+            />
+          </View>
+        </View>
+        <Text variant="small" color={colors.textFaint}>
+          Applies to games you start from now on. Games already running keep the rate they
+          started on.
+        </Text>
+      </Card>
 
       {db.game_types
         .slice()
@@ -98,9 +134,12 @@ export default function Games() {
         .map((type) => {
           const rows = board.filter((v) => v.gameType.id === type.id);
           if (rows.length === 0) return null;
-          const rule = resolvePricingRule(db.pricing_rules, type.id, '');
+          const rule = resolvePricingRule(db.pricing_rules, type.id, '', period);
           return (
-            <Section key={type.id} title={`${type.name}${rule ? ` · ${rateLabel(rule)}` : ''}`}>
+            <Section
+              key={type.id}
+              title={`${type.name}${rule ? ` · ${rateLabel(rule)} ${TARIFF_LABEL[period].toLowerCase()}` : ''}`}
+            >
               <View style={styles.grid}>
                 {rows.map((view) => (
                   <ResourceTile
@@ -131,10 +170,10 @@ export default function Games() {
                   size="lg"
                   full
                   loading={busy}
-                  onPress={() => void stop()}
+                  onPress={openStop}
                 />
                 <Button
-                  label="Open the bill"
+                  label={`Open ${current.resource.label}'s bill`}
                   tone="ghost"
                   full
                   onPress={() => {
@@ -162,7 +201,7 @@ export default function Games() {
           <View style={{ gap: space.lg }}>
             <Card level={2} style={{ alignItems: 'center', gap: space.xs }}>
               <Eyebrow>Running for</Eyebrow>
-              <Text variant="hero" color={colors.accent} tabular>
+              <Text variant="hero" color={colors.accentText} tabular>
                 {formatStopwatch(secondsBetween(current.session.session.started_at, now))}
               </Text>
               <Text variant="small" color={colors.textMuted}>
@@ -178,7 +217,7 @@ export default function Games() {
                   {current.session.priced.minimumApplied ? ' · minimum charge' : ''}
                 </Text>
               </View>
-              <Money value={current.session.priced.amount} variant="title" color={colors.accent} />
+              <Money value={current.session.priced.amount} variant="title" color={colors.accentText} />
             </Card>
             {current.session.sale.total > 0 ? (
               <Card level={2} style={styles.amountRow}>
@@ -189,19 +228,30 @@ export default function Games() {
               </Card>
             ) : null}
             <Text variant="small" color={colors.textFaint}>
-              Stopping adds the game time to bill #{current.session.sale.number}. Food and drinks
-              can go on the same bill before you take payment.
+              Stopping puts the game time on {current.resource.label}&apos;s bill. Snacks for the
+              same people go on that bill too; anyone else gets a separate sale from the Sale
+              button.
             </Text>
           </View>
         ) : current ? (
           <View style={{ gap: space.lg }}>
             {current.resource.status === 'AVAILABLE' ? (
-              <Card level={2} style={{ gap: space.xs }}>
-                <Eyebrow>Rate</Eyebrow>
-                <Text variant="title">{rateLabelFor(db, current)}</Text>
+              <Card level={2} style={{ gap: space.md }}>
+                <View style={{ gap: space.xs }}>
+                  <Eyebrow>Rate</Eyebrow>
+                  <Text variant="title">{rateLabelFor(db, current, period)}</Text>
+                </View>
+                <Segmented
+                  options={[
+                    { value: 'DAY', label: 'Day rate' },
+                    { value: 'NIGHT', label: 'Night rate' },
+                  ]}
+                  value={period}
+                  onChange={(next) => setPeriod(next as TariffPeriod)}
+                />
                 <Text variant="small" color={colors.textMuted}>
-                  The timer starts the moment you tap Start. The rate is locked to this session, so
-                  a price change later will not alter this bill.
+                  The timer starts the moment you tap Start, and the rate is locked to this
+                  session. You can still change the amount when you stop it.
                 </Text>
               </Card>
             ) : (
@@ -229,6 +279,19 @@ export default function Games() {
           </View>
         ) : null}
       </Sheet>
+
+      <GameAmountSheet
+        visible={!!stopping?.session}
+        onClose={() => setStopping(null)}
+        onConfirm={(amount) => void stop(amount)}
+        busy={busy}
+        mode="stop"
+        resourceLabel={stopping?.resource.label ?? ''}
+        metered={stopping?.session?.priced.amount ?? 0}
+        minutes={stopping?.session?.priced.billedMinutes ?? 0}
+        ratePerMinute={stopping?.session?.session.rate_per_minute ?? 0}
+        period={stopping?.session?.session.period ?? 'DAY'}
+      />
     </Screen>
   );
 }
@@ -236,9 +299,10 @@ export default function Games() {
 function rateLabelFor(
   db: ReturnType<typeof useDb>,
   view: ResourceView,
+  period: TariffPeriod,
 ): string {
-  const rule = resolvePricingRule(db.pricing_rules, view.gameType.id, view.resource.id);
-  return rule ? rateLabel(rule) : 'No price set';
+  const rule = resolvePricingRule(db.pricing_rules, view.gameType.id, view.resource.id, period);
+  return rule ? rateLabel(rule) : `No ${period.toLowerCase()} price set`;
 }
 
 function ResourceTile({
@@ -263,7 +327,7 @@ function ResourceTile({
         styles.tile,
         {
           backgroundColor: busy ? colors.surfaceHigh : colors.surface,
-          borderColor: busy ? colors.accent : colors.hairline,
+          borderColor: busy ? colors.accent : colors.border,
           opacity: resource.status === 'DISABLED' ? 0.5 : pressed ? 0.85 : 1,
           transform: [{ scale: pressed ? 0.98 : 1 }],
         },
@@ -274,19 +338,19 @@ function ResourceTile({
         <Text variant="heading" numberOfLines={1} style={{ flex: 1 }}>
           {resource.label}
         </Text>
-        <Icon name={statusIcon(resource)} size={18} color={busy ? colors.accent : colors.textFaint} />
+        <Icon name={statusIcon(resource)} size={18} color={busy ? colors.accentText : colors.textFaint} />
       </View>
 
       {session ? (
         <>
-          <Text variant="display" color={colors.accent} tabular>
+          <Text variant="display" color={colors.accentText} tabular>
             {formatStopwatch(secondsBetween(session.session.started_at, now))}
           </Text>
           <View style={styles.tileFoot}>
             <Text variant="small" color={colors.textMuted} numberOfLines={1} style={{ flex: 1 }}>
               {session.customer?.name ?? 'Walk-in'}
             </Text>
-            <Money value={session.priced.amount} variant="bodyStrong" color={colors.accent} />
+            <Money value={session.priced.amount} variant="bodyStrong" color={colors.accentText} />
           </View>
         </>
       ) : (

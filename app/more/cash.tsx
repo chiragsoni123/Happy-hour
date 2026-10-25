@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import {
+  View,
+} from 'react-native';
 
 import { formatMoney } from '@/domain/money';
 import { can } from '@/domain/permissions';
@@ -8,7 +10,7 @@ import { currentBusinessDay, formatClock, relativeDayLabel } from '@/domain/time
 import type { ExpenseCategory } from '@/domain/types';
 import { profileName } from '@/store/selectors';
 import { useActor, useDb, useStore } from '@/store/useStore';
-import { colors, space } from '@/theme';
+import { colors, space, themed } from '@/theme';
 import {
   Badge,
   Button,
@@ -432,7 +434,7 @@ function Line({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   hero: {
     backgroundColor: colors.accent,
     gap: space.xs,
@@ -451,4 +453,4 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: space.md,
   },
-});
+}));

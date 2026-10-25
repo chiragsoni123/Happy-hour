@@ -1,5 +1,5 @@
 import type { Paise } from './money';
-import type { GamingSession, PricingRule } from './types';
+import type { GamingSession, PricingRule, TariffPeriod } from './types';
 import { minutesBetween } from './time';
 
 /**
@@ -55,18 +55,30 @@ export function priceSession(session: GamingSession, atIso: string): PricedSessi
 }
 
 /**
- * Picks the rule that applies to a resource: a resource-specific override beats the
- * game-type default. Returns null when nothing is configured, which callers must treat
- * as "cannot start a session" rather than "free".
+ * Picks the rule that applies to a resource for the chosen tariff: a resource-specific
+ * override beats the game-type default. Returns null when nothing is configured, which
+ * callers must treat as "cannot start a session" rather than "free".
  */
 export function resolvePricingRule(
   rules: readonly PricingRule[],
   gameTypeId: string,
   resourceId: string,
+  period: TariffPeriod = 'DAY',
 ): PricingRule | null {
-  const active = rules.filter((r) => r.active && r.game_type_id === gameTypeId);
-  return active.find((r) => r.resource_id === resourceId) ?? active.find((r) => r.resource_id === null) ?? null;
+  const active = rules.filter(
+    (r) => r.active && r.game_type_id === gameTypeId && r.period === period,
+  );
+  return (
+    active.find((r) => r.resource_id === resourceId) ??
+    active.find((r) => r.resource_id === null) ??
+    null
+  );
 }
+
+export const TARIFF_LABEL: Record<TariffPeriod, string> = {
+  DAY: 'Day',
+  NIGHT: 'Night',
+};
 
 /** `"₹10/min"` style label for the rate, used all over the gaming UI. */
 export function rateLabel(snap: PricingSnapshot): string {

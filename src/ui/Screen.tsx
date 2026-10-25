@@ -3,14 +3,13 @@ import { type ReactNode } from 'react';
 import {
   Pressable,
   ScrollView,
-  StyleSheet,
   View,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themed } from '@/theme';
 
 import { Icon } from './Icon';
 import { Eyebrow, Text } from './Text';
@@ -93,7 +92,7 @@ export function Header({ title, eyebrow, back, right, onBack }: HeaderProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   page: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -115,4 +114,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-});
+}));

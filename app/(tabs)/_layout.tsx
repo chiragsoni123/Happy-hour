@@ -2,11 +2,14 @@ import * as Haptics from 'expo-haptics';
 import { Redirect, useRouter } from 'expo-router';
 import { TabList, TabSlot, TabTrigger, Tabs, type TabTriggerSlotProps } from 'expo-router/ui';
 import { forwardRef } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import {
+  Pressable,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useStore } from '@/store/useStore';
-import { colors, radius, shadow, space } from '@/theme';
+import { colors, elevation, radius, space, themed, useTheme } from '@/theme';
 import { Icon, Text, type IconName } from '@/ui';
 
 /**
@@ -21,6 +24,7 @@ export default function TabsLayout() {
   const actorId = useStore((s) => s.actorId);
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  useTheme();
   const bottom = Math.max(insets.bottom, space.md);
 
   if (!actorId) return <Redirect href="/sign-in" />;
@@ -57,7 +61,7 @@ export default function TabsLayout() {
         }}
         style={({ pressed }) => [
           styles.fab,
-          shadow.float,
+          elevation('float'),
           { bottom: bottom + 18, transform: [{ scale: pressed ? 0.95 : 1 }] },
         ]}
       >
@@ -77,7 +81,7 @@ interface TabButtonProps extends TabTriggerSlotProps {
 
 const TabButton = forwardRef<View, TabButtonProps>(
   ({ icon, label, isFocused, onPress, ...rest }, ref) => {
-    const tint = isFocused ? colors.accent : colors.textFaint;
+    const tint = isFocused ? colors.accentText : colors.textFaint;
     return (
       <Pressable
         ref={ref}
@@ -101,7 +105,7 @@ const TabButton = forwardRef<View, TabButtonProps>(
 );
 TabButton.displayName = 'TabButton';
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -115,10 +119,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: colors.hairline,
+    borderColor: colors.border,
     paddingHorizontal: space.sm,
     paddingVertical: space.sm,
-    ...shadow.float,
+    ...elevation('float'),
   },
   tab: {
     flex: 1,
@@ -143,4 +147,4 @@ const styles = StyleSheet.create({
     borderWidth: 5,
     borderColor: colors.bg,
   },
-});
+}));

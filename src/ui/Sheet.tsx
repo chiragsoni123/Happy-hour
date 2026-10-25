@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { colors, radius, shadow, space } from '@/theme';
+import { colors, elevation, radius, space, themed } from '@/theme';
 
 import { Icon } from './Icon';
 import { Eyebrow, Text } from './Text';
@@ -81,10 +81,10 @@ export function Sheet({ visible, onClose, title, eyebrow, children, footer }: Sh
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(3,6,3,0.72)',
+    backgroundColor: colors.backdrop,
     justifyContent: 'flex-end',
   },
   dock: {
@@ -97,7 +97,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.xl,
     paddingTop: space.md,
     maxHeight: '92%',
-    ...shadow.float,
+    ...elevation('float'),
   },
   grabber: {
     width: 44,
@@ -130,4 +130,4 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.hairline,
   },
-});
+}));

@@ -5,6 +5,7 @@ import * as auth from '@/data/auth';
 import type { Backend } from '@/data/backend';
 import { errorMessage } from '@/data/errors';
 import type { Database, ID, Profile } from '@/domain/types';
+import { useThemeStore } from '@/theme/useTheme';
 
 export type ToastTone = 'success' | 'error' | 'info';
 
@@ -28,6 +29,11 @@ interface StoreState {
   signInWithPin: (profileId: ID, pin: string) => Promise<boolean>;
   signInWithPassword: (email: string, password: string) => Promise<boolean>;
   signUp: (email: string, password: string, fullName: string) => Promise<boolean>;
+  requestPasswordReset: (email: string) => Promise<boolean>;
+  /** Exchanges the code from the recovery link for a session. */
+  openRecoveryLink: (code: string) => Promise<boolean>;
+  /** Sets the password on that recovery session and loads the app. */
+  finishPasswordReset: (password: string) => Promise<boolean>;
   signOut: () => Promise<void>;
   notify: (tone: ToastTone, title: string, detail?: string) => void;
   dismissToast: () => void;
@@ -70,7 +76,15 @@ export const useStore = create<StoreState>((set, get) => ({
         set({ db, actorId: null, ready: true });
         return;
       }
-      const db = await getBackend().load();
+      // Paint from the last snapshot first, then bring it up to date. On a cafe
+      // connection that is the difference between a blank screen and a working till.
+      const backend = getBackend();
+      const cached = await backend.hydrate();
+      if (cached && cached.profiles.some((p) => p.id === actorId && p.active)) {
+        set({ db: cached, actorId, ready: true });
+      }
+
+      const db = await backend.load();
       const stillValid = db.profiles.some((p) => p.id === actorId && p.active) ? actorId : null;
       if (!stillValid) await auth.signOut();
       set({ db: stillValid ? db : null, actorId: stillValid, ready: true });
@@ -93,6 +107,30 @@ export const useStore = create<StoreState>((set, get) => ({
       }
       return userId;
     }),
+
+  requestPasswordReset: async (email) => {
+    try {
+      await auth.requestPasswordReset(email);
+      get().notify('success', 'Link sent. Open it on this phone.');
+      return true;
+    } catch (e) {
+      get().notify('error', errorMessage(e));
+      return false;
+    }
+  },
+
+  openRecoveryLink: async (code) => {
+    try {
+      await auth.sessionFromRecoveryCode(code);
+      return true;
+    } catch (e) {
+      get().notify('error', errorMessage(e));
+      return false;
+    }
+  },
+
+  finishPasswordReset: async (password) =>
+    get().afterSignIn(() => auth.setNewPassword(password)),
 
   /** Shared tail of every sign-in route: authenticate, then load what that person can see. */
   afterSignIn: async (authenticate) => {
@@ -163,6 +201,9 @@ function extractDb(result: unknown): Database | null {
 /** The loaded database. Only call from inside the authenticated app tree. */
 export function useDb(): Database {
   const db = useStore((s) => s.db);
+  // Every screen passes through here, which makes it the one place a theme change can
+  // reach all of them: colours are read live at render, this just triggers the render.
+  useThemeStore((s) => s.version);
   if (!db) throw new Error('useDb() used before the store finished booting');
   return db;
 }

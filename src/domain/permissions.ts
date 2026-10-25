@@ -18,6 +18,7 @@ export const PERMISSIONS = [
   'customer.create',
   'product.read',
   'product.manage',
+  'product.remove',
   'price.manage',
   'inventory.read',
   'inventory.add',

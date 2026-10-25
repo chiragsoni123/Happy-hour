@@ -50,11 +50,14 @@ describe('priceSession', () => {
     customer_id: null,
     pricing_rule_id: 'rule1',
     ...snap,
+    period: 'DAY',
     status: 'ACTIVE',
     started_at: '2026-08-31T19:00:00.000Z',
     ended_at: null,
     billed_minutes: null,
+    metered_amount: null,
     amount: null,
+    amount_source: 'METERED',
     business_day: '2026-08-31',
     started_by: 'staff1',
     ended_by: null,
@@ -80,6 +83,7 @@ describe('priceSession', () => {
 describe('resolvePricingRule', () => {
   const base = {
     model: 'PER_MINUTE' as const,
+    period: 'DAY' as const,
     minimum_charge: 0,
     min_billable_minutes: 1,
     billing_increment_minutes: 1,
@@ -102,6 +106,20 @@ describe('resolvePricingRule', () => {
 
   it('returns null rather than a free game when nothing is configured', () => {
     expect(resolvePricingRule(rules, 'pool', 'pool-1')).toBeNull();
+  });
+
+  it('keeps day and night rates apart', () => {
+    const withNight: PricingRule[] = [
+      ...rules,
+      { id: 'night', game_type_id: 'ps5', resource_id: null, name: 'PS5 night', rate_per_minute: 2000, ...base, period: 'NIGHT' },
+    ];
+    expect(resolvePricingRule(withNight, 'ps5', 'ps5-1', 'DAY')?.rate_per_minute).toBe(1000);
+    expect(resolvePricingRule(withNight, 'ps5', 'ps5-1', 'NIGHT')?.rate_per_minute).toBe(2000);
+  });
+
+  it('refuses to fall back to the other tariff when one is missing', () => {
+    // Silently charging the day rate at night would be worse than refusing to start.
+    expect(resolvePricingRule(rules, 'ps5', 'ps5-1', 'NIGHT')).toBeNull();
   });
 });
 

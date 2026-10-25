@@ -1,6 +1,6 @@
 import { rupeesToPaise } from '@/domain/money';
 import { currentBusinessDay, nowIso } from '@/domain/time';
-import type { Database, Product } from '@/domain/types';
+import type { Database, PricingRule, Product } from '@/domain/types';
 
 export const SCHEMA_VERSION = 1;
 
@@ -47,12 +47,14 @@ export function buildSeed(): Database {
     created_at: created,
   };
 
+  // Ordered by how often the counter reaches for them: cigarettes are the most frequent
+  // single purchase, then the mouth-freshener shelf beside the till.
   const categories = [
-    { id: 'cat_drinks', name: 'Cold Drinks', glyph: 'cup', sort_order: 1, archived: false },
-    { id: 'cat_snacks', name: 'Snacks', glyph: 'snack', sort_order: 2, archived: false },
-    { id: 'cat_food', name: 'Food', glyph: 'bowl', sort_order: 3, archived: false },
-    { id: 'cat_smokes', name: 'Cigarettes', glyph: 'smoke', sort_order: 4, archived: false },
-    { id: 'cat_other', name: 'Other', glyph: 'dot', sort_order: 5, archived: false },
+    { id: 'cat_smokes', name: 'Cigarettes', glyph: 'smoke', sort_order: 1, archived: false },
+    { id: 'cat_other', name: 'Other', glyph: 'dot', sort_order: 2, archived: false },
+    { id: 'cat_drinks', name: 'Cold Drinks', glyph: 'cup', sort_order: 3, archived: false },
+    { id: 'cat_snacks', name: 'Snacks', glyph: 'snack', sort_order: 4, archived: false },
+    { id: 'cat_food', name: 'Food', glyph: 'bowl', sort_order: 5, archived: false },
   ];
 
   const p = (
@@ -106,33 +108,35 @@ export function buildSeed(): Database {
     { id: 'res_pool_2', game_type_id: 'gt_pool', label: 'Pool #2', status: 'AVAILABLE' as const, sort_order: 5 },
   ];
 
-  const pricingRules = [
-    {
-      id: 'rule_ps5',
-      game_type_id: 'gt_ps5',
-      resource_id: null,
-      name: 'PS5 standard',
-      model: 'PER_MINUTE' as const,
-      rate_per_minute: rupeesToPaise(10),
-      minimum_charge: rupeesToPaise(50),
-      min_billable_minutes: 5,
-      billing_increment_minutes: 1,
-      active: true,
-      created_at: created,
-    },
-    {
-      id: 'rule_pool',
-      game_type_id: 'gt_pool',
-      resource_id: null,
-      name: 'Pool standard',
-      model: 'PER_MINUTE' as const,
-      rate_per_minute: rupeesToPaise(8),
-      minimum_charge: rupeesToPaise(40),
-      min_billable_minutes: 5,
-      billing_increment_minutes: 1,
-      active: true,
-      created_at: created,
-    },
+  // Day and night are separate rules; staff pick which one when they start the table.
+  // Both start equal so nothing changes in price until the owner edits the night rate.
+  const rule = (
+    id: string,
+    game_type_id: string,
+    name: string,
+    period: 'DAY' | 'NIGHT',
+    ratePerMinute: number,
+    minimum: number,
+  ): PricingRule => ({
+    id,
+    game_type_id,
+    resource_id: null,
+    name,
+    model: 'PER_MINUTE',
+    period,
+    rate_per_minute: rupeesToPaise(ratePerMinute),
+    minimum_charge: rupeesToPaise(minimum),
+    min_billable_minutes: 5,
+    billing_increment_minutes: 1,
+    active: true,
+    created_at: created,
+  });
+
+  const pricingRules: PricingRule[] = [
+    rule('rule_ps5_day', 'gt_ps5', 'PS5 day', 'DAY', 10, 50),
+    rule('rule_ps5_night', 'gt_ps5', 'PS5 night', 'NIGHT', 10, 50),
+    rule('rule_pool_day', 'gt_pool', 'Pool day', 'DAY', 8, 40),
+    rule('rule_pool_night', 'gt_pool', 'Pool night', 'NIGHT', 8, 40),
   ];
 
   const inventoryOpening = products.map((product) => ({

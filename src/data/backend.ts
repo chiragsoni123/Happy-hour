@@ -11,6 +11,7 @@ import type {
   Role,
   Sale,
   Settings,
+  TariffPeriod,
 } from '@/domain/types';
 
 /**
@@ -26,6 +27,12 @@ export interface Backend {
   readonly kind: 'local' | 'supabase';
 
   load(): Promise<Database>;
+
+  /**
+   * The last snapshot held on the device, or null if there is none. Lets the app paint
+   * before the network answers;  then brings it up to date.
+   */
+  hydrate(): Promise<Database | null>;
 
   // ---- trading day -------------------------------------------------------
   setOpeningCash(input: OpeningCashInput): Promise<Database>;
@@ -45,6 +52,8 @@ export interface Backend {
   // ---- gaming ------------------------------------------------------------
   startSession(input: StartSessionInput): Promise<{ db: Database; sessionId: ID; saleId: ID }>;
   stopSession(input: StopSessionInput): Promise<{ db: Database; saleId: ID }>;
+  /** Corrects a stopped game's charge while its bill is still open. */
+  setGamingAmount(input: { actorId: ID; sessionId: ID; amount: Paise }): Promise<Database>;
   setResourceStatus(input: {
     actorId: ID;
     resourceId: ID;
@@ -60,7 +69,8 @@ export interface Backend {
 
   // ---- catalogue ---------------------------------------------------------
   upsertProduct(input: UpsertProductInput): Promise<Database>;
-  archiveProduct(input: { actorId: ID; productId: ID }): Promise<Database>;
+  /** Takes a product off the menu, or puts it back. History that references it is untouched. */
+  archiveProduct(input: { actorId: ID; productId: ID; restore?: boolean }): Promise<Database>;
   updatePricingRule(input: UpdatePricingRuleInput): Promise<Database>;
 
   // ---- cash --------------------------------------------------------------
@@ -119,6 +129,8 @@ export interface CompleteSaleInput {
 export interface StartSessionInput {
   actorId: ID;
   resourceId: ID;
+  /** Which tariff to charge. Chosen by the staff member, never by the clock. */
+  period: TariffPeriod;
   customerId?: ID | null;
   /** Attach the game to an existing open bill instead of opening a new one. */
   saleId?: ID | null;
@@ -128,6 +140,11 @@ export interface StartSessionInput {
 export interface StopSessionInput {
   actorId: ID;
   sessionId: ID;
+  /**
+   * What to actually charge. Omit to accept what the meter worked out; pass a figure to
+   * override it, which is the common case when a customer is charged less than the clock.
+   */
+  amount?: Paise | null;
 }
 
 export interface CreateCustomerInput {

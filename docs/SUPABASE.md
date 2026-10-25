@@ -28,6 +28,35 @@ If sign-up asks you to confirm an email link, either click it, or turn off
 **Authentication → Sign In / Providers → Confirm email** in the dashboard. For a counter
 phone shared at shift change, turning it off is usually the practical choice.
 
+## Two dashboard settings the password-reset link needs
+
+"Forgot your password?" emails a link. Supabase verifies it, then redirects into the
+app with a one-time code, and the app opens a screen to choose a new password. Two
+things have to be true for that redirect to arrive:
+
+**1. The app's addresses must be on the redirect allowlist.** Go to
+**Authentication → URL Configuration → Redirect URLs** and add both:
+
+```
+exp://**
+happyhour://**
+```
+
+The first is what Expo Go uses while developing (`exp://<laptop-ip>:8081/--/reset-password`);
+the second is the real app. Without these, Supabase silently sends the person to the
+Site URL instead, and nothing happens.
+
+**2. Emails only reach team members until custom SMTP is set.** Supabase's built-in
+mailer refuses any address that is not a member of the Supabase organisation. That is
+fine for the owner's account; a staff member with a personal Gmail will see *"will only
+email addresses on the project team"* when they try to reset. The fix is not a paid
+plan — it is any SMTP provider with a free tier (Resend and Brevo both have one) entered
+under **Project Settings → Authentication → SMTP Settings**. Until then, the owner can
+reset a staff member's password from **Authentication → Users** in the dashboard.
+
+The link works once, for an hour, and only on the phone that asked for it — the
+exchange is PKCE, so the verifier lives on that device.
+
 ---
 
 ## How each write reaches the database
