@@ -20,19 +20,27 @@ import { SupabaseBackend } from '../supabase/SupabaseBackend';
  * Row level security answers a delete it does not allow with success and zero rows, not
  * with an error. This fake behaves that way: `rowsDeleted` is what the delete reports back.
  */
-function fakeClient(rowsDeleted: { id: string }[]): SupabaseClient {
+let deleteCalls = 0;
+
+function fakeClient(
+  rowsDeleted: { id: string }[],
+  deleteError: { message: string; code: string } | null = null,
+): SupabaseClient {
   return {
     from: () => {
       let deleting = false;
       const chain = {
         delete: () => {
           deleting = true;
+          deleteCalls += 1;
           return chain;
         },
         eq: () => chain,
         gte: () => Promise.resolve({ data: [], error: null }),
         select: () =>
-          deleting ? Promise.resolve({ data: rowsDeleted, error: null }) : chain,
+          deleting
+            ? Promise.resolve({ data: deleteError ? null : rowsDeleted, error: deleteError })
+            : chain,
         then: (resolve: (v: unknown) => unknown) => resolve({ data: null, error: null }),
       };
       return chain;
@@ -40,19 +48,26 @@ function fakeClient(rowsDeleted: { id: string }[]): SupabaseClient {
   } as unknown as SupabaseClient;
 }
 
-async function backendWithLine(rowsDeleted: { id: string }[]): Promise<SupabaseBackend> {
+async function backendWithLine(
+  rowsDeleted: { id: string }[],
+  opts: { kind?: 'PRODUCT' | 'GAMING'; deleteError?: { message: string; code: string } } = {},
+): Promise<SupabaseBackend> {
   const seed = await new LocalBackend().resetToSeed();
   const db = {
     ...seed,
     sales: [{ id: 'sale1', status: 'OPEN', number: 1001 }],
     sale_items: [
-      { id: 'item1', sale_id: 'sale1', kind: 'PRODUCT', product_id: 'p1', quantity: 1, unit_price: 2000 },
+      { id: 'item1', sale_id: 'sale1', kind: opts.kind ?? 'PRODUCT', product_id: 'p1', quantity: 1, unit_price: 2000 },
     ],
   } as unknown as Database;
-  const backend = new SupabaseBackend(fakeClient(rowsDeleted));
+  const backend = new SupabaseBackend(fakeClient(rowsDeleted, opts.deleteError ?? null));
   (backend as unknown as { db: Database }).db = db;
   return backend;
 }
+
+beforeEach(() => {
+  deleteCalls = 0;
+});
 
 describe('removing a product line on a bill', () => {
   it('reports an error when the database deletes nothing', async () => {
@@ -70,5 +85,22 @@ describe('removing a product line on a bill', () => {
     await expect(
       backend.changeBillItemQuantity({ actorId: 'a', itemId: 'item1', quantity: 0 }),
     ).resolves.toBeDefined();
+  });
+
+  it('shows the database error when the delete itself fails', async () => {
+    const backend = await backendWithLine([], {
+      deleteError: { message: 'permission denied', code: '42501' },
+    });
+    await expect(
+      backend.changeBillItemQuantity({ actorId: 'a', itemId: 'item1', quantity: 0 }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('never tries to delete a game line', async () => {
+    const backend = await backendWithLine([{ id: 'item1' }], { kind: 'GAMING' });
+    await expect(
+      backend.changeBillItemQuantity({ actorId: 'a', itemId: 'item1', quantity: 0 }),
+    ).rejects.toBeInstanceOf(AppError);
+    expect(deleteCalls).toBe(0);
   });
 });

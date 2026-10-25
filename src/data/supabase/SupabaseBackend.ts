@@ -437,7 +437,10 @@ export class SupabaseBackend implements Backend {
       .select('id');
     if (error) throw translate(error);
     if (!data || data.length === 0) {
-      throw new AppError('CONFLICT', 'That line could not be removed.');
+      throw new AppError(
+        'CONFLICT',
+        'That line could not be removed. The bill may already be closed, or the line is already gone.',
+      );
     }
     return this.refresh(['sales', 'sale_items']);
   }
