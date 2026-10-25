@@ -35,6 +35,10 @@ function fakeClient(
           deleteCalls += 1;
           return chain;
         },
+        update: () => {
+          deleting = true;
+          return chain;
+        },
         eq: () => chain,
         gte: () => Promise.resolve({ data: [], error: null }),
         select: () =>
@@ -69,7 +73,7 @@ beforeEach(() => {
   deleteCalls = 0;
 });
 
-describe('removing a product line on a bill', () => {
+describe('changing or removing a product line on a bill', () => {
   it('reports an error when the database deletes nothing', async () => {
     const backend = await backendWithLine([]);
     await expect(
@@ -102,5 +106,19 @@ describe('removing a product line on a bill', () => {
       backend.changeBillItemQuantity({ actorId: 'a', itemId: 'item1', quantity: 0 }),
     ).rejects.toBeInstanceOf(AppError);
     expect(deleteCalls).toBe(0);
+  });
+
+  it('reports an error when a quantity change updates no row', async () => {
+    const backend = await backendWithLine([]);
+    await expect(
+      backend.changeBillItemQuantity({ actorId: 'a', itemId: 'item1', quantity: 2 }),
+    ).rejects.toBeInstanceOf(AppError);
+  });
+
+  it('applies a quantity change when the database updates the row', async () => {
+    const backend = await backendWithLine([{ id: 'item1' }]);
+    await expect(
+      backend.changeBillItemQuantity({ actorId: 'a', itemId: 'item1', quantity: 2 }),
+    ).resolves.toBeDefined();
   });
 });
