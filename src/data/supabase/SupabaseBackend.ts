@@ -382,12 +382,7 @@ export class SupabaseBackend implements Backend {
 
     if (existing) {
       const nextQty = existing.quantity + quantity;
-      return this.write(['sales', 'sale_items'], async () =>
-        this.sb
-          .from('sale_items')
-          .update({ quantity: nextQty, line_total: nextQty * existing.unit_price })
-          .eq('id', existing.id),
-      );
+      return this.updateLine(existing.id, nextQty, existing.unit_price);
     }
 
     return this.write(['sales', 'sale_items'], async () =>
@@ -412,23 +407,49 @@ export class SupabaseBackend implements Backend {
     if (item.kind !== 'PRODUCT') {
       throw new AppError('CONFLICT', 'Game time is priced by the timer and cannot be edited.');
     }
-    if (quantity <= 0) {
-      return this.write(['sales', 'sale_items'], async () =>
-        this.sb.from('sale_items').delete().eq('id', itemId),
-      );
-    }
-    return this.write(['sales', 'sale_items'], async () =>
-      this.sb
-        .from('sale_items')
-        .update({ quantity, line_total: item.unit_price * quantity })
-        .eq('id', itemId),
-    );
+    if (quantity <= 0) return this.deleteLine(itemId);
+    return this.updateLine(itemId, quantity, item.unit_price);
   }
 
   async removeBillItem({ itemId }: { actorId: ID; itemId: ID }): Promise<Database> {
-    return this.write(['sales', 'sale_items'], async () =>
-      this.sb.from('sale_items').delete().eq('id', itemId),
-    );
+    return this.deleteLine(itemId);
+  }
+
+  /** Same silent zero-row answer as a blocked delete, so an update is checked the same way. */
+  private async updateLine(itemId: ID, quantity: number, unitPrice: number): Promise<Database> {
+    const { data, error } = await this.sb
+      .from('sale_items')
+      .update({ quantity, line_total: unitPrice * quantity })
+      .eq('id', itemId)
+      .select('id');
+    if (error) throw translate(error);
+    if (!data || data.length === 0) {
+      throw new AppError(
+        'CONFLICT',
+        'That line could not be changed. The bill may already be closed, or the line was removed.',
+      );
+    }
+    return this.refresh(['sales', 'sale_items']);
+  }
+
+  /**
+   * Row level security answers a delete it does not allow with success and zero rows, not
+   * with an error, so the returned row count is the only way to know the line is gone.
+   */
+  private async deleteLine(itemId: ID): Promise<Database> {
+    const { data, error } = await this.sb
+      .from('sale_items')
+      .delete()
+      .eq('id', itemId)
+      .select('id');
+    if (error) throw translate(error);
+    if (!data || data.length === 0) {
+      throw new AppError(
+        'CONFLICT',
+        'That line could not be removed. The bill may already be closed, or the line is already gone.',
+      );
+    }
+    return this.refresh(['sales', 'sale_items']);
   }
 
   async setBillCustomer({
